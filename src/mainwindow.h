@@ -171,7 +171,10 @@ private:
     QCheckBox *m_lock = nullptr, *m_bold = nullptr, *m_italic = nullptr;
     QPushButton* m_resetWarp = nullptr;
     QSpinBox* m_sides = nullptr;
-    QComboBox *m_lineStyle = nullptr, *m_align = nullptr;
+    QComboBox *m_lineStyle = nullptr, *m_align = nullptr, *m_pathCurve = nullptr;
+    QCheckBox* m_pathClosed = nullptr;
+    QComboBox* m_bubble = nullptr;
+    ColorButton* m_bubbleFill = nullptr;
     ColorButton *m_fill = nullptr, *m_stroke = nullptr, *m_accent = nullptr;
     QLineEdit* m_text = nullptr;
     QFontComboBox* m_font = nullptr;

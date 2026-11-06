@@ -15,6 +15,7 @@
 #include <QWheelEvent>
 #include <QtMath>
 #include <cmath>
+#include <functional>
 
 namespace {
 const int HX[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
@@ -36,11 +37,21 @@ const Canvas::ToolInfo kTools[] = {
     {"Line", "L", "Line: drag from start to end. Ctrl = 15° steps, Ortho = horizontal/vertical, hold Shift = no snapping. Ends snap to shape points and, with "
                   "'Sticky ends', glue to the shape so the line stretches when it moves."},
     {"Arrow", "A", "Arrow: like Line, with a head at the end."},
+    {"Freehand", "F", "Freehand: drag to draw a free shape (smoothed). End near the start to close it. The tool stays active for more strokes."},
+    {"Polyline", "B", "Polyline: click points joined by straight lines. Double-click or Enter finishes, click the first point to close, "
+                      "Backspace removes the last point, Esc cancels. Points snap (Shift = free, Ctrl = 15° steps)."},
+    {"Curve", "Z", "Curve: click points; a smooth curve passes through them. Double-click or Enter finishes, click the first point "
+                   "to close, Backspace removes the last point, Esc cancels. Drag the points of a selected path to reshape it."},
     {"Text", "X", "Text: click to place, then type. Font, size, bold, italic and alignment are in Properties."},
+    {"Speech bubble", "G", "Speech bubble: click to place a text in a bubble, then type it. Drag the yellow handle to point the tail at "
+                           "the speaker. Style (speech, thought, shout, box) and colours in Properties."},
     {"Point", "O", "Point: click to place a helper point (snaps to shape points). Helper points show while editing but are never exported."},
     {"Connect", "C", "Connect: click a point on the first shape, then a point on the second shape; the second shape moves so the "
                      "two points meet. Corners, midpoints, centres and edges snap (markers show them). "
                      "Click the same spot twice to join overlapping shapes. Hold Shift for a free (unsnapped) point. Type: 'Connect as'."},
+    {"Pin", "I", "Pin: click where shapes overlap to connect them at exactly that point (nothing moves). 'Pin joins' in the toolbar: "
+                 "top two shapes, or all shapes under the spot (Ctrl+click = the other one). Type from 'Connect as'; the lower shape "
+                 "becomes the parent. Snaps like the other tools."},
     {"Midpoint", "M", "Midpoint: click two points; a helper point is placed half-way."},
     {"Perpendicular", "U", "Perpendicular: click a line or a shape edge, then a start point, then the end point."},
     {"Parallel", "J", "Parallel: click a line or a shape edge, then a start point, then the end point."},
@@ -160,6 +171,16 @@ void ShapeItem::setShape(const ::Shape& s, bool force)
         m_bounds = m_hit.boundingRect().united(QRectF(-s.w / 2, -ah, s.w, 2 * ah)).adjusted(-hw, -hw, hw, hw);
         break;
     }
+    case ShapeType::Path:
+        if (s.closed) {
+            m_hit = shapePath(s);
+        } else {
+            QPainterPathStroker st;
+            st.setWidth(qMax(10.0, s.strokeWidth + 6));
+            m_hit = st.createStroke(shapePath(s));
+        }
+        m_bounds = m_hit.boundingRect().united(shapePath(s).boundingRect()).adjusted(-hw, -hw, hw, hw);
+        break;
     case ShapeType::Point: {
         const double r = qMax(6.0, s.w / 2);
         m_hit = QPainterPath();
@@ -171,7 +192,8 @@ void ShapeItem::setShape(const ::Shape& s, bool force)
     case ShapeType::Image:
         m_hit = QPainterPath();
         m_hit.addRect(s.localRect());
-        m_bounds = s.localRect().adjusted(-hw, -hw, hw, hw);
+        if (s.type == ShapeType::Text && s.bubble) m_hit = m_hit.united(bubblePath(s));
+        m_bounds = m_hit.boundingRect().adjusted(-hw, -hw, hw, hw);
         break;
     default:
         m_hit = shapePath(s);
@@ -362,6 +384,7 @@ void Canvas::resetConstruction()
     m_steps.clear();
     m_haveRef = false;
     m_connectFrom = 0;
+    m_pathPts.clear();
 }
 
 QString Canvas::promptText() const
@@ -376,6 +399,11 @@ QString Canvas::promptText() const
         if (!m_haveRef) return tr("%1: click a line or a shape edge to use as reference.").arg(toolInfo(m_tool).name);
         if (m_steps.isEmpty()) return tr("%1: click the start point (Esc cancels).").arg(toolInfo(m_tool).name);
         return tr("%1: click the end point (Esc cancels).").arg(toolInfo(m_tool).name);
+    case ToolPolyline:
+    case ToolCurve:
+        if (m_pathPts.isEmpty()) return tr(toolInfo(m_tool).help);
+        return tr("%1: %2 point(s). Click the next point; double-click or Enter finishes; click the first point to close; "
+                  "Backspace undoes a point; Esc cancels.").arg(toolInfo(m_tool).name).arg(m_pathPts.size());
     case ToolConnect:
         if (m_connectFrom)
             return tr("Connect: now click the point on the SECOND shape; it moves so the points meet. "
@@ -523,7 +551,7 @@ bool Canvas::edgeDirectionAt(QPointF sp, QPointF* dir) const
 bool Canvas::toolPicksPoints() const
 {
     switch (m_tool) {
-    case ToolConnect: case ToolLine: case ToolArrow: case ToolPoint:
+    case ToolConnect: case ToolPin: case ToolLine: case ToolArrow: case ToolPoint: case ToolPolyline: case ToolCurve:
     case ToolMidpoint: case ToolPerpendicular: case ToolParallel: case ToolMeasure: return true;
     default: return false;
     }
@@ -554,6 +582,14 @@ int Canvas::hitHandle(QPointF sp) const
     const ::Shape& s = it->shapeData();
     if (s.type == ShapeType::Point) return -1;
     const double sc = viewScale(), tol = 7 / sc;
+    if (s.type == ShapeType::Text && s.bubble && m_tool == ToolSelect &&
+        dist(sp, s.toWorld(QPointF(s.tail.x() * s.w, s.tail.y() * s.h))) < tol)
+        return 99;  // bubble tail
+    if (s.type == ShapeType::Path && m_tool == ToolSelect && s.pts.size() <= 300) {  // path points
+        const QVector<QPointF> lp = pathPointsLocal(s);
+        for (int i = 0; i < lp.size(); ++i)
+            if (dist(sp, s.toWorld(lp[i])) < tol) return 100 + i;
+    }
     if (s.isLinear()) {
         if (dist(sp, s.toWorld({-s.w / 2, 0})) < tol) return 9;
         if (dist(sp, s.toWorld({s.w / 2, 0})) < tol) return 10;
@@ -653,6 +689,17 @@ void Canvas::mousePressEvent(QMouseEvent* e)
         if (h >= 0) {
             m_dragId = selectedIds().constFirst();
             m_handle = h;
+            if (h == 99) {
+                m_drag = DTail;
+                m_orig = *cframe().find(m_dragId);
+                return;
+            }
+            if (h >= 100) {
+                m_drag = DNode;
+                m_handle = h - 100;
+                m_orig = *cframe().find(m_dragId);
+                return;
+            }
             if (h == 8) {
                 m_drag = DRotate;
                 const Solver::DragInfo di = Solver::dragInfo(cframe(), m_dragId);
@@ -743,7 +790,15 @@ void Canvas::mousePressEvent(QMouseEvent* e)
         viewport()->update();
         return;
     }
-    case ToolText: m_drag = DCreateText; return;
+    case ToolPin: pinAt(sp, e->modifiers() & Qt::ControlModifier); return;
+    case ToolFreehand:
+        m_drawPts = {sp};
+        m_drag = DFreehand;
+        return;
+    case ToolPolyline:
+    case ToolCurve: pathClick(sp, e->modifiers()); return;
+    case ToolText:
+    case ToolBubble: m_drag = DCreateText; return;
     case ToolMidpoint:
     case ToolPerpendicular:
     case ToolParallel:
@@ -955,6 +1010,27 @@ void Canvas::mouseMoveEvent(QMouseEvent* e)
         Solver::rotateShape(f, m_dragId, target - s->rot, true);
         break;
     }
+    case DFreehand:
+        if (dist(sp, m_drawPts.constLast()) > 1.5 / viewScale()) m_drawPts << sp;
+        viewport()->update();
+        return;
+    case DTail: {
+        ::Shape* s = f.find(m_dragId);
+        if (!s || s->w <= 0 || s->h <= 0) break;
+        const QPointF l = s->toLocal(pickPoint(sp, m_dragId));
+        s->tail = QPointF(l.x() / s->w, l.y() / s->h);
+        break;
+    }
+    case DNode: {
+        ::Shape* s = f.find(m_dragId);
+        if (!s) break;
+        QVector<QPointF> lp = pathPointsLocal(*s);
+        if (m_handle >= lp.size()) break;
+        lp[m_handle] = s->toLocal(pickPoint(sp, m_dragId));
+        setPathPointsLocal(*s, lp);
+        Solver::enforce(f, m_dragId);
+        break;
+    }
     case DWarp: {
         ::Shape* s = f.find(m_dragId);
         if (!s || s->w <= 0 || s->h <= 0) break;
@@ -1044,6 +1120,45 @@ void Canvas::mouseReleaseEvent(QMouseEvent* e)
     case DWarp:
         if (m_moved) emit edited(tr("Warp"));
         break;
+    case DNode:
+        if (m_moved) emit edited(tr("Move path point"));
+        break;
+    case DTail:
+        if (m_moved) emit edited(tr("Move bubble tail"));
+        break;
+    case DFreehand: {
+        QVector<QPointF> pts = m_drawPts;
+        m_drawPts.clear();
+        if (pts.size() < 3) break;
+        // simplify (Ramer-Douglas-Peucker), then close if it ends near the start
+        const double tol = 1.5 / viewScale();
+        std::function<void(int, int, QVector<bool>&)> rdp = [&](int a, int b, QVector<bool>& keep) {
+            double best = 0;
+            int idx = -1;
+            for (int i = a + 1; i < b; ++i) {
+                const double d = segDist(pts[i], pts[a], pts[b]);
+                if (d > best) {
+                    best = d;
+                    idx = i;
+                }
+            }
+            if (idx >= 0 && best > tol) {
+                keep[idx] = true;
+                rdp(a, idx, keep);
+                rdp(idx, b, keep);
+            }
+        };
+        QVector<bool> keep(pts.size(), false);
+        keep.first() = keep.last() = true;
+        rdp(0, pts.size() - 1, keep);
+        QVector<QPointF> simple;
+        for (int i = 0; i < pts.size(); ++i)
+            if (keep[i]) simple << pts[i];
+        const bool closed = simple.size() > 3 && dist(simple.first(), simple.last()) < 12 / viewScale();
+        if (closed) simple.removeLast();
+        finishPath(simple, closed, true);
+        break;
+    }
     case DLineEnd: {
         ::Shape* s = frame().find(m_dragId);
         if (!s) break;
@@ -1093,6 +1208,16 @@ void Canvas::mouseReleaseEvent(QMouseEvent* e)
         s.text = tr("Text");
         s.fill = style.stroke.alpha() > 0 ? style.stroke : QColor(Qt::black);
         s.strokeWidth = 0;
+        s.bubble = 0;
+        if (m_tool == ToolBubble) {
+            s.bubble = 1;
+            s.text = tr("Hello!");
+            s.fill = Qt::black;
+            s.stroke = style.stroke.alpha() > 0 ? style.stroke : QColor(Qt::black);
+            s.strokeWidth = qMax(2.0, style.strokeWidth);
+            s.bubbleFill = Qt::white;
+            s.tail = QPointF(-0.25, 1.05);
+        }
         s.rot = 0;
         s.pos = snapPoint(m_pressScene);
         fitTextShape(s);
@@ -1148,8 +1273,102 @@ void Canvas::doResize(QPointF sp, bool keepAspect)
     Solver::enforce(f, m_dragId);
 }
 
+// Connect every shape under the spot to the one directly below it (bottom = parent).
+void Canvas::pinAt(QPointF sp, bool invertMode)
+{
+    const QPointF p = pickPoint(sp);
+    QVector<int> stack;  // top first
+    for (ShapeItem* it : shapeItemsAt(sp))
+        if (it->shapeData().type != ShapeType::Point) stack << it->id();
+    if (stack.size() < 2) {
+        emit message(tr("Pin: click where at least two shapes overlap."));
+        return;
+    }
+    const bool all = (pinMode == 1) != invertMode;
+    if (!all) stack.resize(2);  // just the top shape and the one directly below it
+    Frame& f = frame();
+    int made = 0, lastJoint = -1;
+    QStringList skipped;
+    for (int i = stack.size() - 1; i > 0; --i) {
+        const int parent = stack[i], child = stack[i - 1];
+        QString why;
+        const int jid = m_doc->nextId;
+        if (Solver::connectShapes(f, parent, p, child, p, newJointType, jid, &why)) {
+            m_doc->nextId++;
+            lastJoint = jid;
+            ++made;
+        } else {
+            skipped << why;
+        }
+    }
+    sync();
+    if (made) {
+        setSelectedJoint(lastJoint);
+        emit message(tr("Pinned %1 connection(s) (%2) at (%3, %4).%5")
+                         .arg(made).arg(jointTypeName(newJointType)).arg(p.x(), 0, 'f', 1).arg(p.y(), 0, 'f', 1)
+                         .arg(skipped.isEmpty() ? QString() : tr(" Skipped %1: already connected.").arg(skipped.size())));
+        emit edited(tr("Pin"));
+    } else {
+        emit message(tr("Pin: nothing new to connect here. %1").arg(skipped.value(0)));
+    }
+    viewport()->update();
+}
+
+void Canvas::pathClick(QPointF sp, Qt::KeyboardModifiers mods)
+{
+    QPointF p = pickPoint(sp);
+    if (!m_pathPts.isEmpty()) p = constrainLine(m_pathPts.constLast(), p, mods & Qt::ControlModifier);
+    if (m_pathPts.size() >= 3 && dist(p, m_pathPts.first()) < 9 / viewScale()) {  // clicked the first point: close
+        finishPath(m_pathPts, true, m_tool == ToolCurve);
+        return;
+    }
+    if (!m_pathPts.isEmpty() && dist(p, m_pathPts.constLast()) < 0.5) return;  // same spot (e.g. double-click)
+    m_pathPts << p;
+    emit prompt(promptText());
+    viewport()->update();
+}
+
+void Canvas::finishPath(QVector<QPointF> pts, bool closed, bool smooth)
+{
+    m_pathPts.clear();
+    if (pts.size() < 2) {
+        emit prompt(promptText());
+        return;
+    }
+    ::Shape s = style;
+    s.id = m_doc->newId();
+    s.type = ShapeType::Path;
+    s.name.clear();
+    s.text.clear();
+    s.imageKey.clear();
+    s.group = 0;
+    s.lockAspect = false;
+    s.squash = 1;
+    for (QPointF& w : s.warp) w = QPointF();
+    for (EndLink& l : s.ends) l = EndLink();
+    s.rot = 0;
+    s.pos = QPointF();
+    s.closed = closed;
+    s.curve = smooth ? 1 : 0;
+    if (s.strokeWidth <= 0) s.strokeWidth = 2;
+    if (s.stroke.alpha() == 0) s.stroke = Qt::black;
+    setPathPointsLocal(s, pts);
+    frame().shapes.append(s);
+    sync();
+    setSelectedIds({s.id});
+    const bool freehand = m_tool == ToolFreehand;
+    if (!freehand) setTool(ToolSelect);
+    emit edited(freehand ? tr("Freehand") : closed ? tr("Closed path") : tr("Path"));
+    emit message(tr("%1 with %2 points%3. Drag its points (Select tool) to reshape; Closed / Smooth are in Properties.")
+                     .arg(freehand ? tr("Freehand stroke") : tr("Path")).arg(pts.size()).arg(closed ? tr(", closed") : QString()));
+}
+
 void Canvas::mouseDoubleClickEvent(QMouseEvent* e)
 {
+    if ((m_tool == ToolPolyline || m_tool == ToolCurve) && !m_pathPts.isEmpty()) {
+        finishPath(m_pathPts, false, m_tool == ToolCurve);
+        return;
+    }
     if (m_readOnly || m_tool != ToolSelect || e->button() != Qt::LeftButton) return;
     if (ShapeItem* it = topItemAt(mapToScene(e->position().toPoint())))
         if (it->shapeData().type == ShapeType::Text) emit textEditRequested(it->id());
@@ -1181,7 +1400,7 @@ void Canvas::keyPressEvent(QKeyEvent* e)
         return;
     }
     if (e->key() == Qt::Key_Escape) {
-        if (!m_steps.isEmpty() || m_haveRef || m_connectFrom) {
+        if (!m_steps.isEmpty() || m_haveRef || m_connectFrom || !m_pathPts.isEmpty()) {
             resetConstruction();
             emit prompt(promptText());
             viewport()->update();
@@ -1191,6 +1410,18 @@ void Canvas::keyPressEvent(QKeyEvent* e)
             setSelectedIds({});
         }
         return;
+    }
+    if (!m_pathPts.isEmpty()) {
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            finishPath(m_pathPts, false, m_tool == ToolCurve);
+            return;
+        }
+        if (e->key() == Qt::Key_Backspace) {
+            m_pathPts.removeLast();
+            emit prompt(promptText());
+            viewport()->update();
+            return;
+        }
     }
     if (!m_readOnly) {
         const double st = (e->modifiers() & Qt::ShiftModifier) ? (snap ? gridSize : 10) : 1;
@@ -1226,6 +1457,19 @@ void Canvas::keyReleaseEvent(QKeyEvent* e)
 }
 
 // ---------------------------------------------------------------- drag & drop images
+
+void Canvas::contextMenuEvent(QContextMenuEvent* e)
+{
+    if (m_readOnly || !m_doc) return;
+    const QPointF sp = mapToScene(e->pos());
+    if (ShapeItem* it = topItemAt(sp); it && !it->isSelected()) {  // right-click selects (whole group)
+        m_scene->clearSelection();
+        const int g = it->shapeData().group;
+        for (ShapeItem* o : std::as_const(m_items))
+            if (o == it || (g && o->shapeData().group == g)) o->setSelected(true);
+    }
+    emit contextMenuAt(e->globalPos(), sp);
+}
 
 static const char* kLibraryMime = "application/x-tood-library";
 
@@ -1375,6 +1619,46 @@ void Canvas::drawForeground(QPainter* p, const QRectF& rect)
                 p->drawEllipse(rh, hs * 0.6, hs * 0.6);
             }
         }
+    }
+
+    // tail handle of a selected speech bubble
+    if (ids.size() == 1 && m_tool == ToolSelect) {
+        if (const ShapeItem* it = m_items.value(ids.first()); it && it->shapeData().type == ShapeType::Text && it->shapeData().bubble) {
+            const ::Shape& s = it->shapeData();
+            const QPointF c = s.toWorld(QPointF(s.tail.x() * s.w, s.tail.y() * s.h));
+            const double r = 5 / sc;
+            p->setPen(cosmetic(QColor(60, 60, 60), 1));
+            p->setBrush(QColor(255, 210, 0));
+            p->drawPolygon(QPolygonF() << c + QPointF(0, -r) << c + QPointF(r, 0) << c + QPointF(0, r) << c + QPointF(-r, 0));
+        }
+    }
+    // points of a selected path (drag to reshape)
+    if (ids.size() == 1 && m_tool == ToolSelect) {
+        if (const ShapeItem* it = m_items.value(ids.first()); it && it->shapeData().type == ShapeType::Path &&
+                                                              it->shapeData().pts.size() <= 300) {
+            const ::Shape& s = it->shapeData();
+            p->setPen(cosmetic(QColor(0, 120, 215), 1));
+            p->setBrush(Qt::white);
+            for (const QPointF& lp : pathPointsLocal(s)) p->drawEllipse(s.toWorld(lp), 3.5 / sc, 3.5 / sc);
+        }
+    }
+    // path being drawn
+    if (!m_pathPts.isEmpty()) {
+        QVector<QPointF> pts = m_pathPts;
+        if (m_hoverValid) pts << m_hover;
+        p->setPen(cosmetic(QColor(0, 120, 215), 1.5));
+        p->setBrush(Qt::NoBrush);
+        p->drawPath(pathThrough(pts, false, m_tool == ToolCurve));
+        p->setBrush(QColor(0, 120, 215));
+        for (const QPointF& q : m_pathPts) p->drawEllipse(q, 3 / sc, 3 / sc);
+        if (m_pathPts.size() >= 3) {  // ring on the first point: click it to close
+            p->setBrush(Qt::NoBrush);
+            p->drawEllipse(m_pathPts.first(), 7 / sc, 7 / sc);
+        }
+    }
+    if (m_drag == DFreehand && m_drawPts.size() > 1) {
+        p->setPen(cosmetic(QColor(0, 120, 215), 1.5));
+        p->drawPolyline(QPolygonF(m_drawPts));
     }
 
     if (showJoints) {

@@ -40,8 +40,8 @@ public:
     enum Tool {
         ToolSelect, ToolWarp,
         ToolRect, ToolEllipse, ToolTriangle, ToolPolygon, ToolStar, ToolDiamond, ToolHourglass, ToolEye,
-        ToolLine, ToolArrow, ToolText, ToolPoint,
-        ToolConnect, ToolMidpoint, ToolPerpendicular, ToolParallel, ToolMeasure,
+        ToolLine, ToolArrow, ToolFreehand, ToolPolyline, ToolCurve, ToolText, ToolBubble, ToolPoint,
+        ToolConnect, ToolPin, ToolMidpoint, ToolPerpendicular, ToolParallel, ToolMeasure,
         ToolCount
     };
     struct ToolInfo {
@@ -91,6 +91,7 @@ public:
     // Options
     ::Shape style;  // template for new shapes
     JointType newJointType = JointType::Hinge;
+    int pinMode = 0;            // Pin tool: 0 = top two shapes, 1 = all shapes under the spot (Ctrl inverts)
     bool snap = false;          // grid
     bool snapPoints = true;     // corners / midpoints / centres of shapes
     bool ortho = false;         // lines horizontal / vertical only
@@ -113,6 +114,7 @@ signals:
     void message(const QString& text);   // log line in the info panel
     void prompt(const QString& text);    // "what to do next" in the info panel
     void zoomChanged(double scale);
+    void contextMenuAt(QPoint globalPos, QPointF scenePos);
     void cursorMoved(QPointF scenePos);
 
 protected:
@@ -128,9 +130,11 @@ protected:
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dragMoveEvent(QDragMoveEvent* e) override;
     void dropEvent(QDropEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;
 
 private:
-    enum Drag { DNone, DMove, DResize, DLineEnd, DRotate, DWarp, DCreate, DCreateText, DConnect, DJoint, DPan, DRubber };
+    enum Drag { DNone, DMove, DResize, DLineEnd, DRotate, DWarp, DCreate, DCreateText, DConnect, DJoint, DPan, DRubber,
+                DFreehand, DNode, DTail };
 
     Frame& frame() { return m_doc->frames[m_frame]; }
     const Frame& cframe() const { return m_hasDisplay ? m_display : m_doc->frames.at(m_frame); }
@@ -152,6 +156,9 @@ private:
     void constructionClick(QPointF sp);
     void resetConstruction();
     QString promptText() const;
+    void pathClick(QPointF sp, Qt::KeyboardModifiers mods);
+    void pinAt(QPointF sp, bool invertMode);
+    void finishPath(QVector<QPointF> pts, bool closed, bool smooth);
     void updateHoverCursor(QPointF sp);
     void refreshHover();  // recompute the snap marker at the cursor (e.g. when Shift changes)
     void expandToGroups();
@@ -188,6 +195,9 @@ private:
     // connect tool: first picked point (click, then click the second)
     int m_connectFrom = 0;
     QPointF m_connectPoint;
+
+    // path tools: points clicked so far (polyline/curve) and the freehand stroke
+    QVector<QPointF> m_pathPts, m_drawPts;
 
     // construction tools (midpoint, perpendicular, parallel, measure)
     QVector<QPointF> m_steps;

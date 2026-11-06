@@ -152,6 +152,8 @@ Shape lerpShape(const Shape& a, const Shape& b, double t)
     s.fill = lerpColor(a.fill, b.fill, t);
     s.stroke = lerpColor(a.stroke, b.stroke, t);
     s.accent = lerpColor(a.accent, b.accent, t);
+    s.bubbleFill = lerpColor(a.bubbleFill, b.bubbleFill, t);
+    s.tail = a.tail + (b.tail - a.tail) * t;
     s.strokeWidth = l(a.strokeWidth, b.strokeWidth);
     s.opacity = l(a.opacity, b.opacity);
     s.cornerRadius = l(a.cornerRadius, b.cornerRadius);
@@ -162,6 +164,10 @@ Shape lerpShape(const Shape& a, const Shape& b, double t)
     s.squash = l(a.squash, b.squash);
     s.squashAngle = (a.squash == 1.0) ? b.squashAngle : (b.squash == 1.0) ? a.squashAngle : l(a.squashAngle, b.squashAngle);
     for (int k = 0; k < 4; ++k) s.warp[k] = a.warp[k] + (b.warp[k] - a.warp[k]) * t;
+    if (a.pts.size() == b.pts.size() && !a.pts.isEmpty()) {  // same node count: morph the path
+        s.pts = a.pts;
+        for (int i = 0; i < s.pts.size(); ++i) s.pts[i] = a.pts[i] + (b.pts[i] - a.pts[i]) * t;
+    }
     return s;
 }
 }  // namespace

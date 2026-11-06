@@ -18,9 +18,10 @@
 class QPainter;
 
 // Point = construction/helper point: visible while editing, never exported.
+// Path = arbitrary polyline / smooth curve (freehand, polyline and curve tools).
 enum class ShapeType { Rect, Ellipse, Triangle, Polygon, Star, Line, Arrow, Text, Image,
-                       Hourglass, Diamond, Eye, Point };
-constexpr int kShapeTypeCount = 13;
+                       Hourglass, Diamond, Eye, Point, Path };
+constexpr int kShapeTypeCount = 14;
 
 // Hinge:   child can only rotate around the pin; dragging the parent carries the child.
 // Free:    pin stays connected, both sides move freely and the other side swings to trail.
@@ -63,6 +64,12 @@ struct Shape {
     int lineStyle = 0;         // Line/Arrow: 0 straight, 1 spring (sides = coils)
     double amplitude = 8;      // spring half-width
     QColor accent = QColor(35, 30, 30);  // Eye: pupil colour
+    QVector<QPointF> pts;      // Path: points in local coords normalised by (w, h), so resizing scales them
+    bool closed = false;       // Path: closed (fillable) or open
+    int curve = 0;             // Path: 0 straight segments, 1 smooth curve through the points
+    int bubble = 0;            // Text: 0 none, 1 speech, 2 thought, 3 shout, 4 box (caption)
+    QPointF tail = QPointF(-0.25, 1.05);  // Text bubble: tail tip, local coords normalised by (w, h)
+    QColor bubbleFill = Qt::white;
     EndLink ends[2];           // Line/Arrow: start (-w/2) and end (+w/2)
 
     bool hasWarp() const;
@@ -179,6 +186,12 @@ void fitTextShape(Shape& s);
 double arrowHeadLength(const Shape& s);
 QPainterPath shapePath(const Shape& s);
 QPainterPath linePath(const Shape& s, double x0, double x1);  // straight or spring
+// Path through points: straight segments or a smooth Catmull-Rom curve (as cubic Béziers).
+QPainterPath pathThrough(const QVector<QPointF>& p, bool closed, bool smooth);
+QPainterPath bubblePath(const Shape& s);  // speech bubble outline around a text shape (local coords)
+QStringList bubbleNames();
+QVector<QPointF> pathPointsLocal(const Shape& s);                 // denormalised (local coords)
+void setPathPointsLocal(Shape& s, const QVector<QPointF>& local);  // refits pos/w/h around the points
 // Exact points of a shape that point-picking tools snap to (local coordinates).
 enum class SnapKind { Corner, Midpoint, Centre, Edge, Grid, Free };
 struct SnapPoint {

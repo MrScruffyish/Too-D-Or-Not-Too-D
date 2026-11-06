@@ -17,9 +17,11 @@ add_executable(tood
   src/model.h       src/model.cpp
   src/solver.h      src/solver.cpp
   src/gifwriter.h   src/gifwriter.cpp
+  src/oplog.h       src/oplog.cpp
   src/canvas.h      src/canvas.cpp
   src/mainwindow.h  src/mainwindow.cpp
 )
 
 target_compile_options(tood PRIVATE -Wall -Wextra)
+target_link_options(tood PRIVATE -rdynamic)  # function names in crash-log backtraces
 target_link_libraries(tood PRIVATE Qt6::Widgets Qt6::Svg ZLIB::ZLIB)

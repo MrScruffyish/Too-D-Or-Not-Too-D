@@ -3,6 +3,7 @@
 #include "canvas.h"
 #include "gifwriter.h"
 #include "solver.h"
+#include "oplog.h"
 
 #include <QtWidgets>
 #include <QCryptographicHash>
@@ -242,6 +243,42 @@ QIcon toolIcon(int kind)
         p.drawPolygon(h);
         break;
     }
+    case Canvas::ToolFreehand: {
+        QPainterPath fp;
+        fp.moveTo(4, 22);
+        fp.cubicTo(8, 6, 14, 28, 18, 14);
+        fp.cubicTo(21, 5, 26, 10, 28, 24);
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(fp);
+        break;
+    }
+    case Canvas::ToolPolyline:
+    case Canvas::ToolCurve: {
+        const QVector<QPointF> pts{{4, 26}, {10, 8}, {20, 20}, {28, 6}};
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(pathThrough(pts, false, kind == Canvas::ToolCurve));
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 120, 215));
+        for (const QPointF& q : pts) p.drawEllipse(q, 2.5, 2.5);
+        break;
+    }
+    case Canvas::ToolBubble: {
+        Shape s;
+        s.type = ShapeType::Text;
+        s.bubble = 1;
+        s.w = 26;
+        s.h = 18;
+        s.tail = QPointF(-0.2, 0.75);
+        p.save();
+        p.translate(16, 12);
+        p.setPen(QPen(ink, 1.6));
+        p.setBrush(Qt::white);
+        p.drawPath(bubblePath(s));
+        p.setPen(QPen(ink, 1.6));
+        for (int i = -1; i <= 1; ++i) p.drawPoint(QPointF(i * 5, 0));
+        p.restore();
+        break;
+    }
     case Canvas::ToolText: {
         QFont f;
         f.setPixelSize(26);
@@ -266,6 +303,18 @@ QIcon toolIcon(int kind)
         p.restore();
         p.setBrush(QColor(255, 140, 0));
         p.drawEllipse(QPointF(19, 16), 3.5, 3.5);
+        break;
+    }
+    case Canvas::ToolPin: {  // push pin over two overlapping shapes
+        p.setPen(QPen(ink, 1.2));
+        p.setBrush(QColor(90, 150, 230));
+        p.drawRect(3, 14, 18, 14);
+        p.setBrush(QColor(230, 120, 90));
+        p.drawEllipse(QPointF(20, 20), 8, 8);
+        p.setPen(QPen(ink, 2));
+        p.drawLine(QPointF(14, 18), QPointF(20, 9));
+        p.setBrush(QColor(220, 40, 60));
+        p.drawEllipse(QPointF(21, 7), 5, 4);
         break;
     }
     case Canvas::ToolMidpoint:
@@ -366,13 +415,37 @@ MainWindow::MainWindow()
     connect(m_canvas, &Canvas::liveChanged, this, &MainWindow::refreshProps);
     connect(m_canvas, &Canvas::selectionChanged, this, [this] {
         ++m_selEpoch;
+        const QVector<int> ids = m_canvas->selectedIds();
+        QStringList shown;
+        for (int k = 0; k < qMin(8, int(ids.size())); ++k) shown << QString::number(ids[k]);
+        OpLog::op(m_canvas->selectedJoint() >= 0 && ids.isEmpty()
+                      ? QStringLiteral("select connection #%1").arg(m_canvas->selectedJoint())
+                      : QStringLiteral("select %1 shape(s) [%2%3]").arg(ids.size()).arg(shown.join(',')).arg(ids.size() > 8 ? ",…" : ""));
         refreshProps();
     });
     connect(m_canvas, &Canvas::toolChanged, this, [this](int t) {
+        OpLog::op(QStringLiteral("tool: %1").arg(QString::fromLatin1(Canvas::toolInfo(t).name)));
         if (t >= 0 && t < m_toolActs.size()) m_toolActs[t]->setChecked(true);
     });
     connect(m_canvas, &Canvas::textEditRequested, this, &MainWindow::editText);
     connect(m_canvas, &Canvas::imageDropped, this, [this](const QString& p, QPointF at) { insertImage(p, at); });
+    connect(m_canvas, &Canvas::contextMenuAt, this, [this](QPoint global, QPointF) {
+        QMenu menu;
+        const bool sel = !m_canvas->selectedIds().isEmpty();
+        if (sel) {
+            menu.addActions({m_actCut, m_actCopy, m_actDup, m_actDel});
+            menu.addSeparator();
+            menu.addActions({m_actGroup, m_actUngroup, m_actSelConnected});
+            menu.addAction(m_actLibAdd);
+            menu.addSeparator();
+            menu.addActions({m_actFwd, m_actBack, m_actFront, m_actBottom});
+            menu.addSeparator();
+            menu.addAction(m_actDisconnect);
+        } else {
+            menu.addActions({m_actPaste, m_actSelAll});
+        }
+        menu.exec(global);
+    });
     connect(m_canvas, &Canvas::libraryDropped, this, [this](const QString& p, QPointF at) { libraryInsert(p, at); });
     connect(m_canvas, &Canvas::message, this, &MainWindow::log);
     connect(m_canvas, &Canvas::prompt, this, &MainWindow::setPrompt);
@@ -595,6 +668,9 @@ void MainWindow::buildActions()
     m_actRedo = m_undo->createRedoAction(this, tr("&Redo"));
     m_actRedo->setShortcuts({QKeySequence::Redo, QKeySequence(tr("Ctrl+Y"))});
     m_actRedo->setIcon(themeIcon("edit-redo", QStyle::SP_ArrowForward));
+    connect(m_undo, &QUndoStack::indexChanged, this, [this](int idx) {
+        OpLog::op(QStringLiteral("undo stack at %1/%2 (%3)").arg(idx).arg(m_undo->count()).arg(m_undo->undoText()));
+    });
     m_actCut = act(tr("Cu&t"), QKeySequence::Cut, [this] { cutSel(); });
     m_actCopy = act(tr("&Copy"), QKeySequence::Copy, [this] { copySel(); });
     m_actPaste = act(tr("&Paste"), QKeySequence::Paste, [this] { paste(); });
@@ -844,6 +920,19 @@ void MainWindow::buildToolbars()
         setPrompt(tr(h[qBound(0, i, 3)]));
     });
     tb->addWidget(m_jointCombo);
+    tb->addWidget(new QLabel(tr(" Pin joins ")));
+    auto* pinMode = new QComboBox;
+    pinMode->addItems({tr("Top two"), tr("All under the spot")});
+    pinMode->setToolTip(tr("Pin tool (I): connect only the top two shapes, or every shape under the spot (Ctrl+click = the other)"));
+    connect(pinMode, &QComboBox::currentIndexChanged, this, [this](int i) {
+        m_canvas->pinMode = i;
+        m_canvas->setTool(Canvas::ToolPin);
+    });
+    tb->addWidget(pinMode);
+    tb->addSeparator();
+    m_actGroup->setToolTip(tr("Group the selected shapes (Ctrl+G)"));
+    m_actUngroup->setToolTip(tr("Ungroup (Ctrl+Shift+G)"));
+    tb->addActions({m_actGroup, m_actUngroup, m_actSelConnected, m_actLibAdd});
     tb->addSeparator();
     tb->addActions({m_actSnapPts, m_actOrtho, m_actSticky, m_actGrid, m_actSnap, m_actOnion, m_actMotion, m_actJoints});
     tb->addSeparator();
@@ -1168,6 +1257,16 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     m_form->addRow(tr("Font size"), m_fs);
     m_form->addRow(QString(), bi);
     m_form->addRow(tr("Align"), m_align);
+    m_bubble = new QComboBox;
+    m_bubble->addItems(bubbleNames());
+    m_bubbleFill = new ColorButton(tr("Bubble colour"));
+    m_form->addRow(tr("Bubble"), m_bubble);
+    m_form->addRow(tr("Bubble fill"), m_bubbleFill);
+    m_pathClosed = new QCheckBox(tr("Closed (can be filled)"));
+    m_pathCurve = new QComboBox;
+    m_pathCurve->addItems({tr("Straight segments"), tr("Smooth curve")});
+    m_form->addRow(QString(), m_pathClosed);
+    m_form->addRow(tr("Path"), m_pathCurve);
     v->addWidget(m_shapeBox);
 
     m_jointBox = new QGroupBox(tr("Connection"));
@@ -1321,6 +1420,26 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     connect(m_bold, &QCheckBox::toggled, this, [this](bool b) { editAll([b](Shape& s) { s.bold = b; }, tr("Bold"), 18); });
     connect(m_italic, &QCheckBox::toggled, this, [this](bool b) { editAll([b](Shape& s) { s.italic = b; }, tr("Italic"), 25); });
     connect(m_align, &QComboBox::currentIndexChanged, this, [this](int i) { editAll([i](Shape& s) { s.align = i; }, tr("Align"), 26); });
+    connect(m_bubble, &QComboBox::currentIndexChanged, this, [this](int i) {
+        editAll([i](Shape& s) {
+            if (s.type != ShapeType::Text) return;
+            const bool was = s.bubble != 0;
+            s.bubble = i;
+            if (i && s.strokeWidth <= 0) s.strokeWidth = 2;
+            if (i && s.stroke.alpha() == 0) s.stroke = Qt::black;
+            if (i && !was) fitTextShape(s);  // make room for the bubble
+        }, tr("Speech bubble"), 35);
+    });
+    m_bubbleFill->onChanged = [this](const QColor& c) {
+        m_palette->addRecent(c);
+        editAll([c](Shape& s) { s.bubbleFill = c; }, tr("Bubble colour"), 36);
+    };
+    connect(m_pathClosed, &QCheckBox::toggled, this, [this](bool b) {
+        editAll([b](Shape& s) { if (s.type == ShapeType::Path) s.closed = b; }, tr("Close path"), 28);
+    });
+    connect(m_pathCurve, &QComboBox::currentIndexChanged, this, [this](int i) {
+        editAll([i](Shape& s) { if (s.type == ShapeType::Path) s.curve = i; }, tr("Path style"), 29);
+    });
 
     connect(m_jType, &QComboBox::currentIndexChanged, this, [this](int i) {
         editJoint([i](Frame&, Joint& j) { j.type = JointType(i); }, tr("Connection type"), 30);
@@ -1345,6 +1464,7 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
 
 void MainWindow::log(const QString& text)
 {
+    OpLog::op(QStringLiteral("info: ") + text);
     m_log->appendPlainText(QTime::currentTime().toString("HH:mm:ss  ") + text);
     statusBar()->showMessage(text, 5000);
 }
@@ -1353,6 +1473,8 @@ void MainWindow::setPrompt(const QString& text) { m_prompt->setText(text); }
 
 void MainWindow::commit(const QString& text, int mergeId)
 {
+    OpLog::op(QStringLiteral("edit: %1  [chapter %2, frame %3, %4 shapes]")
+                  .arg(text).arg(m_doc.activeChapter + 1).arg(m_cur + 1).arg(m_doc.frames.at(m_cur).shapes.size()));
     m_canvas->finishSpring(false);
     m_undo->push(new SnapshotCmd(this, m_committed, m_committedFrame, m_doc, m_cur, text, mergeId));
     m_committed = m_doc;
@@ -1364,6 +1486,7 @@ void MainWindow::commit(const QString& text, int mergeId)
 
 void MainWindow::applySnapshot(const Document& d, int frame)
 {
+    OpLog::op(QStringLiteral("restore state (undo/redo/new/open) -> frame %1").arg(frame + 1));
     m_canvas->finishSpring(false);
     if (m_playing) togglePlay();
     const bool geom = d.width != m_doc.width || d.height != m_doc.height || d.background != m_doc.background;
@@ -1383,6 +1506,8 @@ void MainWindow::applySnapshot(const Document& d, int frame)
 
 void MainWindow::setCurrentFrame(int i, bool fromTimeline)
 {
+    if (i != m_cur) OpLog::op(QStringLiteral("frame %1 -> %2%3").arg(m_cur + 1).arg(i + 1)
+                                  .arg(i >= 0 && i < m_doc.frames.size() && m_doc.frames.at(i).isTween() ? " (dynamic tween)" : ""));
     m_canvas->finishSpring(true);
     i = qBound(0, i, m_doc.frames.size() - 1);
     if (i != m_cur || m_canvas->frameIndex() != i) {
@@ -1596,6 +1721,10 @@ void MainWindow::refreshProps()
         m_bold->setChecked(s->bold);
         m_italic->setChecked(s->italic);
         m_align->setCurrentIndex(s->align);
+        m_pathClosed->setChecked(s->closed);
+        m_bubble->setCurrentIndex(s->bubble);
+        m_bubbleFill->setColor(s->bubbleFill);
+        m_pathCurve->setCurrentIndex(s->curve);
 
         const ShapeType t = s->type;
         const bool text = t == ShapeType::Text, img = t == ShapeType::Image, lin = s->isLinear();
@@ -1613,11 +1742,16 @@ void MainWindow::refreshProps()
         row(m_sq, !lin && !pt);
         row(m_sqa, !lin && !pt);
         row(m_resetWarp, s->hasWarp());
-        row(m_fill, !lin && !img && !pt);
+        row(m_fill, !lin && !img && !pt && !(t == ShapeType::Path && !s->closed));
+        row(m_pathClosed, t == ShapeType::Path);
+        row(m_pathCurve, t == ShapeType::Path);
+        if (t == ShapeType::Path && single) m_typeLabel->setText(tr("Path #%1 (%2 points)").arg(s->id).arg(s->pts.size()));
         label(m_fill, text ? tr("Colour") : tr("Fill"));
-        row(m_stroke, !text && !pt);
+        row(m_stroke, (!text || s->bubble) && !pt);
+        row(m_bubble, text);
+        row(m_bubbleFill, text && s->bubble);
         row(m_accent, t == ShapeType::Eye);
-        row(m_sw, !text && !pt);
+        row(m_sw, (!text || s->bubble) && !pt);
         row(m_op, !pt);
         row(m_cr, t == ShapeType::Rect);
         const bool hasSides = t == ShapeType::Polygon || t == ShapeType::Star || t == ShapeType::Diamond || (lin && s->lineStyle == 1);
@@ -1882,6 +2016,7 @@ void MainWindow::exportFrame()
 
 void MainWindow::exportAnimation()
 {
+    OpLog::op(QStringLiteral("export animation dialog"));
     if (m_playing) togglePlay();
     m_canvas->finishSpring(true);
     const int n = m_doc.frames.size();
@@ -2625,6 +2760,7 @@ void MainWindow::setFrameDurations(int ms, bool all)
 // Playback runs over the expanded frame list (dynamic tweens become their in-betweens).
 void MainWindow::togglePlay()
 {
+    OpLog::op(m_playing ? QStringLiteral("play: stop") : QStringLiteral("play: start"));
     if (m_playing) {
         m_playing = false;
         m_playTimer.stop();
@@ -3006,6 +3142,7 @@ void MainWindow::libraryDelete()
 // Scale every image down to 2x the largest size it is displayed at in the project.
 void MainWindow::optimizeImages()
 {
+    OpLog::op(QStringLiteral("optimize images"));
     QHash<QString, QSizeF> need;
     for (int c = 0; c < m_doc.chapters.size(); ++c)
         for (const Frame& f : m_doc.chapterFrames(c))

@@ -65,7 +65,7 @@ bool gzipDecompress(const QByteArray& in, QByteArray& out, QString* err)
     return true;
 }
 const char* const kShapeKeys[] = {"rect", "ellipse", "triangle", "polygon", "star",  "line",  "arrow",
-                                  "text", "image",   "hourglass", "diamond", "eye", "point"};
+                                  "text", "image",   "hourglass", "diamond", "eye", "point", "path"};
 const char* const kJointKeys[] = {"hinge", "free", "weld", "elastic"};
 
 QJsonObject linkToJson(const EndLink& l)
@@ -119,6 +119,11 @@ QJsonObject shapeToJson(const Shape& s)
         o["bold"] = s.bold;
         o["it"] = s.italic;
         o["al"] = s.align;
+        if (s.bubble) {
+            o["bubble"] = s.bubble;
+            o["tail"] = QJsonArray{s.tail.x(), s.tail.y()};
+            o["bfill"] = colorStr(s.bubbleFill);
+        }
     }
     if (s.type == ShapeType::Image) o["img"] = s.imageKey;
     if (s.lockAspect) o["lock"] = true;
@@ -138,6 +143,13 @@ QJsonObject shapeToJson(const Shape& s)
         if (s.ends[1].target) o["endB"] = linkToJson(s.ends[1]);
     }
     if (s.type == ShapeType::Eye) o["acc"] = colorStr(s.accent);
+    if (s.type == ShapeType::Path) {
+        QJsonArray pa;
+        for (const QPointF& p : s.pts) pa << p.x() << p.y();
+        o["pts"] = pa;
+        o["closed"] = s.closed;
+        o["curve"] = s.curve;
+    }
     return o;
 }
 
@@ -166,6 +178,9 @@ Shape shapeFromJson(const QJsonObject& o)
     s.bold = o.value("bold").toBool();
     s.italic = o.value("it").toBool();
     s.align = o.value("al").toInt(0);
+    s.bubble = o.value("bubble").toInt(0);
+    if (const QJsonArray ta = o.value("tail").toArray(); ta.size() == 2) s.tail = QPointF(ta[0].toDouble(), ta[1].toDouble());
+    s.bubbleFill = colorFrom(o.value("bfill"), Qt::white);
     s.group = o.value("grp").toInt(0);
     s.imageKey = o.value("img").toString();
     s.lockAspect = o.value("lock").toBool();
@@ -177,6 +192,10 @@ Shape shapeFromJson(const QJsonObject& o)
     s.lineStyle = o.value("ls").toInt(0);
     s.amplitude = o.value("amp").toDouble(8);
     s.accent = colorFrom(o.value("acc"), s.accent);
+    const QJsonArray pa = o.value("pts").toArray();
+    for (int i = 0; i + 1 < pa.size(); i += 2) s.pts << QPointF(pa[i].toDouble(), pa[i + 1].toDouble());
+    s.closed = o.value("closed").toBool();
+    s.curve = o.value("curve").toInt(0);
     s.ends[0] = linkFromJson(o.value("endA"));
     s.ends[1] = linkFromJson(o.value("endB"));
     return s;
@@ -302,6 +321,8 @@ bool operator==(const Shape& a, const Shape& b)
            a.italic == b.italic && a.align == b.align && a.group == b.group &&
            a.lockAspect == b.lockAspect && a.squash == b.squash && a.squashAngle == b.squashAngle &&
            a.lineStyle == b.lineStyle && a.amplitude == b.amplitude && a.accent == b.accent &&
+           a.closed == b.closed && a.curve == b.curve && a.pts == b.pts &&
+           a.bubble == b.bubble && a.tail == b.tail && a.bubbleFill == b.bubbleFill &&
            a.name == b.name && a.text == b.text && a.fontFamily == b.fontFamily &&
            a.imageKey == b.imageKey;
 }
@@ -525,7 +546,7 @@ QByteArray encodeImage(const QImage& img)
 QString shapeTypeName(ShapeType t)
 {
     static const char* n[] = {"Rectangle", "Ellipse", "Triangle", "Polygon", "Star",  "Line", "Arrow",
-                              "Text",      "Image",   "Hourglass", "Diamond", "Eye",  "Point"};
+                              "Text",      "Image",   "Hourglass", "Diamond", "Eye",  "Point", "Path"};
     return QString::fromLatin1(n[int(t)]);
 }
 
@@ -551,6 +572,82 @@ void fitTextShape(Shape& s)
                                       s.text.isEmpty() ? QStringLiteral(" ") : s.text);
     s.w = br.width() + 12;
     s.h = br.height() + 6;
+    if (s.bubble) {  // room for the bubble around the text (round shapes need more)
+        const double k = s.bubble == 4 ? 1.15 : s.bubble == 1 ? 1.35 : 1.55;
+        s.w = s.w * k + 16;
+        s.h = s.h * k + 14;
+    }
+}
+
+QStringList bubbleNames()
+{
+    return {QObject::tr("None"), QObject::tr("Speech"), QObject::tr("Thought"), QObject::tr("Shout"), QObject::tr("Box (caption)")};
+}
+
+QPainterPath bubblePath(const Shape& s)
+{
+    QPainterPath body;
+    const QRectF r = s.localRect();
+    const double m = qMin(s.w, s.h);
+    const QPointF tip(s.tail.x() * s.w, s.tail.y() * s.h);
+    const double tl = std::hypot(tip.x(), tip.y());
+    const QPointF dir = tl > 1e-6 ? tip / tl : QPointF(0, 1), perp(-dir.y(), dir.x());
+    auto triangleTail = [&](double baseW) {
+        QPainterPath t;
+        const QPointF b = dir * m * 0.15;
+        t.moveTo(b + perp * baseW);
+        t.lineTo(tip);
+        t.lineTo(b - perp * baseW);
+        t.closeSubpath();
+        return t;
+    };
+    switch (s.bubble) {
+    case 2: {  // thought: cloud + trailing circles
+        const double rb = m * 0.2;
+        body.addEllipse(r.adjusted(rb * 0.4, rb * 0.4, -rb * 0.4, -rb * 0.4));
+        const int n = qBound(8, int((s.w + s.h) / (m * 0.32)), 22);
+        for (int i = 0; i < n; ++i) {
+            const double a = 2 * M_PI * i / n;
+            QPainterPath c;
+            c.addEllipse(QPointF(std::cos(a) * (s.w / 2 - rb), std::sin(a) * (s.h / 2 - rb)), rb, rb);
+            body = body.united(c);
+        }
+        // edge of the ellipse in the tail direction, then three shrinking circles to the tip
+        const double ex = s.w / 2, ey = s.h / 2;
+        const double k = 1.0 / std::sqrt(dir.x() * dir.x() / (ex * ex) + dir.y() * dir.y() / (ey * ey));
+        const QPointF edge = dir * k;
+        if (tl > k) {
+            const double rs[3] = {rb * 0.55, rb * 0.38, rb * 0.24};
+            const double ts[3] = {0.3, 0.62, 0.92};
+            for (int i = 0; i < 3; ++i) {
+                QPainterPath c;
+                c.addEllipse(edge + (tip - edge) * ts[i], rs[i], rs[i]);
+                body.addPath(c);
+            }
+        }
+        return body;
+    }
+    case 3: {  // shout: jagged burst + spike
+        QPolygonF poly;
+        const int n = 22;
+        for (int i = 0; i < 2 * n; ++i) {
+            const double a = M_PI * i / n;
+            const double k = (i & 1) ? 0.84 : 1.0;
+            poly << QPointF(std::cos(a) * s.w / 2 * k, std::sin(a) * s.h / 2 * k);
+        }
+        body.addPolygon(poly);
+        body.closeSubpath();
+        return body.united(triangleTail(m * 0.12));
+    }
+    case 4:  // box / caption
+        body.addRect(r);
+        return body.united(triangleTail(m * 0.14));
+    default: {  // speech: rounded body + pointed tail
+        const double rr = m * 0.45;
+        body.addRoundedRect(r, rr, rr);
+        return body.united(triangleTail(m * 0.16));
+    }
+    }
 }
 
 double arrowHeadLength(const Shape& s) { return qMin(s.w * 0.5, qMax(10.0, s.strokeWidth * 4)); }
@@ -624,11 +721,55 @@ QPainterPath shapePath(const Shape& s)
         p.closeSubpath();
         break;
     case ShapeType::Point: p.addEllipse(r); break;
+    case ShapeType::Path: return pathThrough(pathPointsLocal(s), s.closed, s.curve == 1);
     case ShapeType::Line:
     case ShapeType::Arrow: return linePath(s, -s.w / 2, s.w / 2);
     default: p.addRect(r);
     }
     return p;
+}
+
+QPainterPath pathThrough(const QVector<QPointF>& p, bool closed, bool smooth)
+{
+    QPainterPath path;
+    const int n = p.size();
+    if (n == 0) return path;
+    path.moveTo(p[0]);
+    if (n == 1) return path;
+    const int segs = closed ? n : n - 1;
+    for (int i = 0; i < segs; ++i) {
+        const QPointF p1 = p[i], p2 = p[(i + 1) % n];
+        if (!smooth || n < 3) {
+            path.lineTo(p2);
+            continue;
+        }
+        const QPointF p0 = closed ? p[(i - 1 + n) % n] : p[qMax(0, i - 1)];
+        const QPointF p3 = closed ? p[(i + 2) % n] : p[qMin(n - 1, i + 2)];
+        path.cubicTo(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    if (closed) path.closeSubpath();
+    return path;
+}
+
+QVector<QPointF> pathPointsLocal(const Shape& s)
+{
+    QVector<QPointF> out;
+    out.reserve(s.pts.size());
+    for (const QPointF& p : s.pts) out << QPointF(p.x() * s.w, p.y() * s.h);
+    return out;
+}
+
+void setPathPointsLocal(Shape& s, const QVector<QPointF>& local)
+{
+    if (local.isEmpty()) return;
+    QRectF bb(local.first(), QSizeF(0, 0));
+    for (const QPointF& p : local) bb = bb.united(QRectF(p, QSizeF(0, 0)));
+    const QPointF c = bb.center();
+    s.pos = s.toWorld(c);
+    s.w = qMax(1.0, bb.width());
+    s.h = qMax(1.0, bb.height());
+    s.pts.clear();
+    for (const QPointF& p : local) s.pts << QPointF((p.x() - c.x()) / s.w, (p.y() - c.y()) / s.h);
 }
 
 // Spring: the number of coils is fixed, so stretching the line widens the zigzag.
@@ -671,11 +812,17 @@ void paintShapeLocal(QPainter* p, const Shape& s, const QImage* img)
         }
         break;
     case ShapeType::Text:
+        if (s.bubble) {
+            p->setPen(pen);
+            p->setBrush(s.bubbleFill);
+            p->drawPath(bubblePath(s));
+        }
         p->save();
         p->setClipRect(r, Qt::IntersectClip);
         p->setFont(shapeFont(s));
         p->setPen(s.fill);
-        p->drawText(r, (s.align == 1 ? Qt::AlignLeft : s.align == 2 ? Qt::AlignRight : Qt::AlignHCenter) |
+        p->drawText(s.bubble ? r.adjusted(s.w * 0.1 + 4, s.h * 0.1 + 3, -s.w * 0.1 - 4, -s.h * 0.1 - 3) : r,
+                    (s.align == 1 ? Qt::AlignLeft : s.align == 2 ? Qt::AlignRight : Qt::AlignHCenter) |
                            Qt::AlignVCenter | Qt::TextWordWrap, s.text);
         p->restore();
         break;
@@ -719,6 +866,11 @@ void paintShapeLocal(QPainter* p, const Shape& s, const QImage* img)
         }
         break;
     }
+    case ShapeType::Path:
+        p->setPen(pen);
+        p->setBrush(s.closed ? brush : QBrush(Qt::NoBrush));
+        p->drawPath(shapePath(s));
+        break;
     default:
         p->setPen(pen);
         p->setBrush(brush);
@@ -755,6 +907,10 @@ QVector<SnapPoint> snapPoints(const Shape& s)
         add(0, 0, SnapKind::Midpoint);
         return v;  // the centre of a line is its midpoint
     case ShapeType::Point: add(0, 0, SnapKind::Centre); return v;
+    case ShapeType::Path:
+        if (s.pts.size() <= 64)  // nodes of hand-made paths (freehand strokes have too many)
+            for (const QPointF& p : pathPointsLocal(s)) add(p.x(), p.y(), SnapKind::Corner);
+        break;
     case ShapeType::Ellipse:  // quadrant points
         add(0, -h, SnapKind::Midpoint); add(w, 0, SnapKind::Midpoint);
         add(0, h, SnapKind::Midpoint);  add(-w, 0, SnapKind::Midpoint);
@@ -793,6 +949,7 @@ QVector<SnapPoint> snapPoints(const Shape& s)
         break;
     }
     default:  // rect, text, image
+        if (s.type == ShapeType::Text && s.bubble) add(s.tail.x() * s.w, s.tail.y() * s.h, SnapKind::Corner);  // tail tip
         corners(w, h);
         add(0, -h, SnapKind::Midpoint); add(w, 0, SnapKind::Midpoint);
         add(0, h, SnapKind::Midpoint);  add(-w, 0, SnapKind::Midpoint);

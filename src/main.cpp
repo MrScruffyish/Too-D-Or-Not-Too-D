@@ -1,9 +1,11 @@
 #include "gifwriter.h"
 #include "mainwindow.h"
 #include "solver.h"
+#include "oplog.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QTimer>
 #include <cstdio>
@@ -219,6 +221,24 @@ int main(int argc, char** argv)
     QApplication::setOrganizationName("TooD");
 
     const QStringList args = app.arguments();
+    if (args.contains("--help") || args.contains("-h")) {
+        std::printf("Usage: tood [options] [project.tood]\n\n"
+                    "  --log-session[=FILE]  write every operation of this session to a log file\n"
+                    "                        (default: %s/session-<date>.log)\n"
+                    "  --selftest DIR        run the headless self-test, writing files to DIR\n"
+                    "  -h, --help            show this help\n\n"
+                    "Crashes are always recorded (backtrace + last operations) in:\n  %s\n",
+                    qPrintable(QFileInfo(OpLog::crashLogPath()).absolutePath()), qPrintable(OpLog::crashLogPath()));
+        return 0;
+    }
+    OpLog::installCrashHandler();
+    for (const QString& a : args)
+        if (a == "--log-session" || a.startsWith("--log-session=")) {
+            const QString path = a.contains('=') ? a.section('=', 1) : QString();
+            if (OpLog::startSession(path)) std::printf("Session log: %s\n", qPrintable(OpLog::sessionLogPath()));
+            else std::fprintf(stderr, "Could not open session log %s\n", qPrintable(path));
+        }
+    OpLog::op(QStringLiteral("start TooD (Qt %1)  args: %2").arg(qVersion(), args.mid(1).join(' ')));
     const int st = args.indexOf("--selftest");
     if (st >= 0) {
         const QString dir = args.value(st + 1, QDir::tempPath());
