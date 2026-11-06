@@ -240,6 +240,20 @@ void Canvas::resetScene()
     invalidateBackground();
 }
 
+void Canvas::setDisplayFrame(const Frame* f)
+{
+    m_hasDisplay = f != nullptr;
+    m_display = f ? *f : Frame();
+    sync();
+}
+
+void Canvas::setOnionFrame(const Frame* f)
+{
+    m_hasOnion = f != nullptr;
+    m_onionFrame = f ? *f : Frame();
+    if (onion) invalidateBackground();
+}
+
 void Canvas::setFrameIndex(int i)
 {
     m_frame = qBound(0, i, m_doc->frames.size() - 1);
@@ -1247,11 +1261,11 @@ void Canvas::drawBackground(QPainter* p, const QRectF& rect)
     if (m_doc->background.alpha() < 255) p->fillRect(cr, QBrush(checker()));
     p->fillRect(cr, m_doc->background);
 
-    if (onion && !m_readOnly && m_frame > 0) {
+    if (onion && !m_readOnly && m_hasOnion) {
         p->save();
         p->setClipRect(cr);
         p->setOpacity(0.28);
-        renderFrame(p, *m_doc, m_doc->frames.at(m_frame - 1), false);
+        renderFrame(p, *m_doc, m_onionFrame, false);
         p->restore();
     }
     if (showGrid && gridSize * sc >= 5) {
@@ -1277,13 +1291,39 @@ void Canvas::drawForeground(QPainter* p, const QRectF& rect)
         pp.addRect(cr);
         p->fillPath(pp, QColor(30, 30, 36, 150));
     }
-    if (m_readOnly) return;
     p->setRenderHint(QPainter::Antialiasing, true);
     auto cosmetic = [](const QColor& c, double w, Qt::PenStyle st = Qt::SolidLine) {
         QPen pen(c, w, st);
         pen.setCosmetic(true);
         return pen;
     };
+    if (showMotion && m_ghosts.size() > 1) {  // motion paths of shapes that move through the tween
+        QHash<int, QPolygonF> paths;
+        for (const Frame& g : std::as_const(m_ghosts))
+            for (const ::Shape& s : g.shapes)
+                if (s.type != ShapeType::Point) paths[s.id] << s.pos;
+        QSet<int> moving;
+        for (auto it = paths.cbegin(); it != paths.cend(); ++it) {
+            const QRectF r = it.value().boundingRect();
+            if (r.width() + r.height() > 1.0) moving.insert(it.key());
+        }
+        p->setBrush(Qt::NoBrush);
+        p->setPen(cosmetic(QColor(0, 110, 255, 60), 1));
+        const int step = qMax(1, int(m_ghosts.size()) / 40);  // at most ~40 ghost outlines
+        for (int i = 0; i < m_ghosts.size(); i += step)
+            for (const ::Shape& s : m_ghosts.at(i).shapes)
+                if (moving.contains(s.id)) p->drawPath(s.transform().map(shapePath(s)));
+        for (int id : std::as_const(moving)) {
+            const QPolygonF& poly = paths.value(id);
+            p->setPen(cosmetic(QColor(255, 110, 0, 210), 1.5, Qt::DashLine));
+            p->drawPolyline(poly);
+            p->setPen(Qt::NoPen);
+            p->setBrush(QColor(255, 110, 0, 210));
+            for (const QPointF& pt : poly) p->drawEllipse(pt, 2.5 / sc, 2.5 / sc);
+            p->setBrush(Qt::NoBrush);
+        }
+    }
+    if (m_readOnly) return;
 
     // selection outlines (+ dashed box around selected groups)
     const QVector<int> ids = selectedIds();

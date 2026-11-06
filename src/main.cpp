@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QJsonDocument>
 #include <QTimer>
 #include <cstdio>
 
@@ -185,7 +186,30 @@ static int selfTest2(const QString& dir)
     const bool chOk = cback.chapters.size() == 2 && cback.activeChapter == 1 && cback.frames.size() == 3 &&
                       cback.chapterFrames(0).size() == 1 && cback.chapters.at(0).name == "Intro" && cback.totalFrames() == 4;
     std::printf("chapters roundtrip ok=%d (total %d frames)\n", chOk, cback.totalFrames());
-    return (gapA < 1e-6 && gapB < 1e-6 && gapWhileDragging && !Solver::hasElasticGap(f, 0.5) && chOk) ? 0 : 1;
+
+    // file format: saved files are gzip; plain JSON (old/hand-edited) still loads; damage is reported
+    QFile gzf(cpath);
+    gzf.open(QIODevice::ReadOnly);
+    const QByteArray head = gzf.read(2);
+    const bool isGzip = head.size() == 2 && uchar(head[0]) == 0x1f && uchar(head[1]) == 0x8b;
+    const QString plainPath = QDir(dir).filePath("plain.tood");
+    QFile pf(plainPath);
+    pf.open(QIODevice::WriteOnly);
+    pf.write(QJsonDocument(cd.toJson()).toJson());
+    pf.close();
+    Document plainBack;
+    const bool plainOk = Document::load(plainPath, plainBack, &err) && plainBack.totalFrames() == 4;
+    QFile bad(QDir(dir).filePath("broken.tood"));
+    bad.open(QIODevice::WriteOnly);
+    bad.write(QByteArray("\x1f\x8b\x08\x00garbage", 12));
+    bad.close();
+    Document badBack;
+    QString badErr;
+    const bool badRejected = !Document::load(bad.fileName(), badBack, &badErr);
+    std::printf("format: gzip=%d plain-json loads=%d damaged rejected=%d (%s)\n", isGzip, plainOk, badRejected,
+                qPrintable(badErr));
+    return (gapA < 1e-6 && gapB < 1e-6 && gapWhileDragging && !Solver::hasElasticGap(f, 0.5) && chOk && isGzip &&
+            plainOk && badRejected) ? 0 : 1;
 }
 
 int main(int argc, char** argv)

@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Svg)
+find_package(ZLIB REQUIRED)
 
 add_executable(tood
   src/main.cpp
@@ -21,4 +22,4 @@ add_executable(tood
 )
 
 target_compile_options(tood PRIVATE -Wall -Wextra)
-target_link_libraries(tood PRIVATE Qt6::Widgets Qt6::Svg)
+target_link_libraries(tood PRIVATE Qt6::Widgets Qt6::Svg ZLIB::ZLIB)

@@ -10,8 +10,60 @@
 #include <QSet>
 #include <QtMath>
 #include <cmath>
+#include <zlib.h>
 
 namespace {
+
+// .tood files are gzip-compressed JSON (readable with `zcat file.tood | jq .`).
+// Loading also accepts plain JSON, so older or hand-edited files still open.
+bool gzipCompress(const QByteArray& in, QByteArray& out, QString* err)
+{
+    z_stream zs{};
+    if (deflateInit2(&zs, 6, Z_DEFLATED, 15 + 16 /* gzip header */, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        if (err) *err = QObject::tr("zlib initialisation failed");
+        return false;
+    }
+    out.resize(int(deflateBound(&zs, uLong(in.size()))) + 32);
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.constData()));
+    zs.avail_in = uInt(in.size());
+    zs.next_out = reinterpret_cast<Bytef*>(out.data());
+    zs.avail_out = uInt(out.size());
+    const int rc = deflate(&zs, Z_FINISH);
+    out.resize(int(zs.total_out));
+    deflateEnd(&zs);
+    if (rc != Z_STREAM_END) {
+        if (err) *err = QObject::tr("compression failed");
+        return false;
+    }
+    return true;
+}
+
+bool gzipDecompress(const QByteArray& in, QByteArray& out, QString* err)
+{
+    z_stream zs{};
+    if (inflateInit2(&zs, 15 + 32 /* auto-detect gzip/zlib */) != Z_OK) {
+        if (err) *err = QObject::tr("zlib initialisation failed");
+        return false;
+    }
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.constData()));
+    zs.avail_in = uInt(in.size());
+    out.clear();
+    char buf[1 << 16];
+    int rc = Z_OK;
+    while (rc == Z_OK) {
+        zs.next_out = reinterpret_cast<Bytef*>(buf);
+        zs.avail_out = sizeof(buf);
+        rc = inflate(&zs, Z_NO_FLUSH);
+        if (rc != Z_OK && rc != Z_STREAM_END) break;
+        out.append(buf, int(sizeof(buf) - zs.avail_out));
+    }
+    inflateEnd(&zs);
+    if (rc != Z_STREAM_END) {
+        if (err) *err = QObject::tr("The file is damaged (decompression failed).");
+        return false;
+    }
+    return true;
+}
 const char* const kShapeKeys[] = {"rect", "ellipse", "triangle", "polygon", "star",  "line",  "arrow",
                                   "text", "image",   "hourglass", "diamond", "eye", "point"};
 const char* const kJointKeys[] = {"hinge", "free", "weld", "elastic"};
@@ -306,6 +358,13 @@ QJsonObject Document::toJson() const
         for (const Frame& f : chapterFrames(c)) {
             QJsonObject fo;
             fo["dur"] = f.durationMs;
+            if (f.isTween()) {
+                fo["tweenN"] = f.tweenCount;
+                fo["tweenEase"] = f.tweenEase;
+                fo["tweenSquash"] = f.tweenSquash;
+                fo["tweenPath"] = f.tweenPath;
+                fo["tweenArc"] = f.tweenArc;
+            }
             QJsonArray sa, ja;
             for (const Shape& s : f.shapes) {
                 sa.append(shapeToJson(s));
@@ -327,11 +386,8 @@ QJsonObject Document::toJson() const
     for (const QString& key : usedImages) {
         auto it = images.constFind(key);
         if (it == images.constEnd()) continue;
-        QByteArray ba;
-        QBuffer buf(&ba);
-        buf.open(QIODevice::WriteOnly);
-        it.value().save(&buf, "PNG");
-        io[key] = QString::fromLatin1(ba.toBase64());
+        const QByteArray file = imageFiles.value(key);
+        io[key] = QString::fromLatin1((file.isEmpty() ? encodeImage(it.value()) : file).toBase64());
     }
     o["images"] = io;
     return o;
@@ -344,6 +400,11 @@ static QVector<Frame> framesFromJson(const QJsonArray& arr, int& maxId)
         const QJsonObject fo = fv.toObject();
         Frame f;
         f.durationMs = qMax(10, fo.value("dur").toInt(100));
+        f.tweenCount = qMax(0, fo.value("tweenN").toInt(0));
+        f.tweenEase = fo.value("tweenEase").toInt(1);
+        f.tweenSquash = fo.value("tweenSquash").toDouble(0);
+        f.tweenPath = fo.value("tweenPath").toInt(0);
+        f.tweenArc = fo.value("tweenArc").toDouble(0);
         for (const QJsonValue& sv : fo.value("shapes").toArray()) {
             f.shapes.append(shapeFromJson(sv.toObject()));
             maxId = qMax(maxId, qMax(f.shapes.constLast().id, f.shapes.constLast().group));
@@ -375,9 +436,10 @@ bool Document::fromJson(const QJsonObject& o, Document& d, QString* err)
 
     const QJsonObject io = o.value("images").toObject();
     for (auto it = io.begin(); it != io.end(); ++it) {
+        const QByteArray file = QByteArray::fromBase64(it.value().toString().toLatin1());
         QImage im;
-        im.loadFromData(QByteArray::fromBase64(it.value().toString().toLatin1()), "PNG");
-        d.images.insert(it.key(), im.convertToFormat(QImage::Format_ARGB32_Premultiplied));
+        im.loadFromData(file);  // format detected from the data (PNG, JPEG, WebP, …)
+        d.setImage(it.key(), im, file);
     }
 
     int maxId = 0;
@@ -404,8 +466,9 @@ bool Document::save(const QString& path, QString* err) const
         if (err) *err = f.errorString();
         return false;
     }
-    f.write(QJsonDocument(toJson()).toJson(QJsonDocument::Compact));
-    if (!f.commit()) {
+    QByteArray gz;
+    if (!gzipCompress(QJsonDocument(toJson()).toJson(QJsonDocument::Compact), gz, err)) return false;
+    if (f.write(gz) != gz.size() || !f.commit()) {
         if (err) *err = f.errorString();
         return false;
     }
@@ -419,8 +482,14 @@ bool Document::load(const QString& path, Document& out, QString* err)
         if (err) *err = f.errorString();
         return false;
     }
+    QByteArray data = f.readAll();
+    if (data.size() >= 2 && uchar(data[0]) == 0x1f && uchar(data[1]) == 0x8b) {  // gzip magic
+        QByteArray plain;
+        if (!gzipDecompress(data, plain, err)) return false;
+        data.swap(plain);
+    }
     QJsonParseError pe;
-    const QJsonDocument jd = QJsonDocument::fromJson(f.readAll(), &pe);
+    const QJsonDocument jd = QJsonDocument::fromJson(data, &pe);
     if (pe.error != QJsonParseError::NoError) {
         if (err) *err = pe.errorString();
         return false;
@@ -429,6 +498,29 @@ bool Document::load(const QString& path, Document& out, QString* err)
 }
 
 // ---------------------------------------------------------------- Rendering
+
+QByteArray encodeImage(const QImage& img)
+{
+    bool opaque = !img.hasAlphaChannel();
+    if (!opaque) {
+        const QImage a = img.convertToFormat(QImage::Format_ARGB32);
+        opaque = true;
+        for (int y = 0; y < a.height() && opaque; ++y) {
+            const QRgb* L = reinterpret_cast<const QRgb*>(a.constScanLine(y));
+            for (int x = 0; x < a.width(); ++x)
+                if (qAlpha(L[x]) != 255) {
+                    opaque = false;
+                    break;
+                }
+        }
+    }
+    QByteArray ba;
+    QBuffer buf(&ba);
+    buf.open(QIODevice::WriteOnly);
+    if (opaque) img.convertToFormat(QImage::Format_RGB32).save(&buf, "JPG", 92);
+    else img.save(&buf, "PNG");
+    return ba;
+}
 
 QString shapeTypeName(ShapeType t)
 {

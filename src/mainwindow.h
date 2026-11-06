@@ -69,6 +69,7 @@ private:
     void openDoc();
     bool saveDoc();
     bool saveDocAs();
+    void optimizeImages();
     void insertImage(const QString& path = QString(), QPointF at = QPointF(qQNaN(), qQNaN()));
     void exportFrame();
     void exportAnimation();
@@ -116,6 +117,10 @@ private:
     void frameTween();
     void setFrameDurations(int ms, bool all);
     void togglePlay();
+    bool requireKeyframe();     // false (and a message) if the current frame is a dynamic tween
+    void updateCanvasFrame();   // what the canvas shows for the current frame (+ onion skin)
+    void tweenBake();
+    void editTween(const std::function<void(Frame&)>& fn, const QString& text, int field);
     void playStep();
 
     Document m_doc, m_committed;
@@ -137,6 +142,14 @@ private:
     QHash<const void*, Thumb> m_thumbs;
     QTimer m_thumbTimer, m_playTimer;
     bool m_playing = false;
+    QVector<Frame> m_playSeq;   // expanded frames while playing
+    QVector<int> m_playMap;     // m_playSeq index -> frame index in the strip
+    int m_playPos = 0;
+    struct TweenThumb {
+        QVector<Shape> a, b;    // keep keyframe data alive so the key pointers stay unique
+        QIcon icon;
+    };
+    QHash<QString, TweenThumb> m_tweenThumbs;
 
     // info panel
     QLabel* m_prompt = nullptr;
@@ -163,6 +176,11 @@ private:
     QLineEdit* m_text = nullptr;
     QFontComboBox* m_font = nullptr;
     QGroupBox* m_jointBox = nullptr;
+    QGroupBox* m_tweenBox = nullptr;
+    QSpinBox *m_twCount = nullptr, *m_twSquash = nullptr;
+    QComboBox *m_twEase = nullptr, *m_twPath = nullptr;
+    QSpinBox* m_twArc = nullptr;
+    QLabel* m_twInfo = nullptr;
     QComboBox* m_jType = nullptr;
     QCheckBox* m_jLim = nullptr;
     QDoubleSpinBox *m_jMin = nullptr, *m_jMax = nullptr, *m_jStiff = nullptr;
@@ -194,6 +212,7 @@ private:
     QAction *m_actCut, *m_actCopy, *m_actPaste, *m_actDup, *m_actDel, *m_actSelAll, *m_actSelConnected, *m_actDisconnect;
     QAction *m_actGroup, *m_actUngroup;
     QAction *m_actFwd, *m_actBack, *m_actFront, *m_actBottom;
+    QAction* m_actMotion = nullptr;
     QAction *m_actZoomIn, *m_actZoomOut, *m_actFit, *m_actGrid, *m_actSnap, *m_actSnapPts, *m_actOrtho, *m_actSticky, *m_actOnion, *m_actJoints;
 
     bool m_shownOnce = false;

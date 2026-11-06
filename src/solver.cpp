@@ -439,8 +439,35 @@ double ease(double t, int mode)
     case 1: return t * t * (3 - 2 * t);
     case 2: return t * t;
     case 3: return 1 - (1 - t) * (1 - t);
+    case 4: return t < 0.5 ? 4 * t * t * t : 1 - std::pow(-2 * t + 2, 3) / 2;
+    case 5: {  // back-out: overshoot ~10% and settle
+        const double c1 = 1.70158, c3 = c1 + 1, u = t - 1;
+        return 1 + c3 * u * u * u + c1 * u * u;
+    }
+    case 6: {  // bounce-out
+        const double n1 = 7.5625, d1 = 2.75;
+        if (t < 1 / d1) return n1 * t * t;
+        if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75; }
+        if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375; }
+        t -= 2.625 / d1;
+        return n1 * t * t + 0.984375;
+    }
     default: return t;
     }
+}
+
+QStringList easeNames()
+{
+    return {QObject::tr("Linear (constant speed)"), QObject::tr("Ease in-out (accelerate, then decelerate)"),
+            QObject::tr("Ease in (accelerate)"), QObject::tr("Ease out (decelerate)"),
+            QObject::tr("Strong ease in-out"), QObject::tr("Overshoot (goes past, settles back)"),
+            QObject::tr("Bounce at the end")};
+}
+
+QStringList pathNames()
+{
+    return {QObject::tr("Straight"), QObject::tr("Arc (curves sideways)"), QObject::tr("Thrown (gravity parabola)"),
+            QObject::tr("Smooth through keyframes (spline)")};
 }
 
 Frame tween(const Frame& A, const Frame& B, double t, const TweenOptions& opt)
@@ -455,6 +482,24 @@ Frame tween(const Frame& A, const Frame& B, double t, const TweenOptions& opt)
     for (const Shape& sa : A.shapes) {
         const int k = bi.value(sa.id, -1);
         Shape s = k >= 0 ? lerpShape(sa, B.shapes.at(k), t) : sa;
+        if (k >= 0 && opt.path == 3) {  // Catmull-Rom through the keyframe before a, a, b, and the one after b
+            const QPointF p1 = sa.pos, p2 = B.shapes.at(k).pos;
+            const Shape* s0 = opt.before ? opt.before->find(sa.id) : nullptr;
+            const Shape* s3 = opt.after ? opt.after->find(sa.id) : nullptr;
+            const QPointF p0 = s0 ? s0->pos : p1, p3 = s3 ? s3->pos : p2;
+            const double t2 = t * t, t3 = t2 * t;
+            s.pos = 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3);
+        } else if (k >= 0 && opt.path != 0 && opt.arc != 0) {
+            const QPointF pa = sa.pos, pb = B.shapes.at(k).pos;
+            if (opt.path == 2) {  // thrown: constant horizontal speed, parabolic height (screen y grows downwards)
+                const double u = opt.rawT >= 0 ? opt.rawT : t;
+                s.pos = pa + (pb - pa) * u + QPointF(0, -opt.arc * 4 * u * (1 - u));
+            } else {               // arc: bulge perpendicular to the straight path
+                const QPointF d = pb - pa;
+                const double l = len(d);
+                if (l > 1e-6) s.pos += QPointF(-d.y() / l, d.x() / l) * (-opt.arc * 4 * t * (1 - t));
+            }
+        }
         if (k < 0) {
             s.opacity *= (1 - t);  // disappearing: fade out
         } else if (opt.squash > 0 && !jointed.contains(s.id) && !s.isLinear() && !s.hasLinks()) {
@@ -516,6 +561,60 @@ Frame tween(const Frame& A, const Frame& B, double t, const TweenOptions& opt)
         for (int i = 0; i < out.shapes.size(); ++i) resolve(out.shapes.at(i).id);
     updateStretch(out);  // connectors follow their (interpolated) targets
     return out;
+}
+
+QVector<Frame> makeTweens(const Frame& a, const Frame& b, int n, int em, double squash, int durationMs, int path, double arc,
+                          const Frame* before, const Frame* after)
+{
+    QVector<Frame> out;
+    out.reserve(n);
+    for (int k = 1; k <= n; ++k) {
+        TweenOptions opt;
+        opt.squash = squash;
+        opt.motionStep = ease(qMin(1.0, (k + 0.5) / (n + 1)), em) - ease(qMax(0.0, (k - 0.5) / (n + 1)), em);
+        opt.path = path;
+        opt.arc = arc;
+        opt.rawT = double(k) / (n + 1);
+        opt.before = before;
+        opt.after = after;
+        Frame t = tween(a, b, ease(opt.rawT, em), opt);
+        t.durationMs = durationMs;
+        t.tweenCount = 0;
+        out << t;
+    }
+    return out;
+}
+
+QVector<Frame> tweenFrames(const QVector<Frame>& frames, int i)
+{
+    if (i < 0 || i >= frames.size() || !frames.at(i).isTween()) return {};
+    int a = i - 1, b = i + 1;
+    while (a >= 0 && frames.at(a).isTween()) --a;
+    while (b < frames.size() && frames.at(b).isTween()) ++b;
+    if (a < 0 || b >= frames.size()) return {};
+    int a0 = a - 1, b1 = b + 1;  // keyframes beyond, for the smooth path
+    while (a0 >= 0 && frames.at(a0).isTween()) --a0;
+    while (b1 < frames.size() && frames.at(b1).isTween()) ++b1;
+    const Frame& t = frames.at(i);
+    return makeTweens(frames.at(a), frames.at(b), t.tweenCount, t.tweenEase, t.tweenSquash, t.durationMs, t.tweenPath, t.tweenArc,
+                      a0 >= 0 ? &frames.at(a0) : nullptr, b1 < frames.size() ? &frames.at(b1) : nullptr);
+}
+
+QVector<Frame> expandFrames(const QVector<Frame>& frames)
+{
+    QVector<Frame> out;
+    out.reserve(frames.size());
+    for (int i = 0; i < frames.size(); ++i) {
+        if (frames.at(i).isTween()) out += tweenFrames(frames, i);
+        else out << frames.at(i);
+    }
+    return out;
+}
+
+int frameSpanMs(const QVector<Frame>& frames, int i)
+{
+    const Frame& f = frames.at(i);
+    return f.isTween() ? f.tweenCount * f.durationMs : f.durationMs;
 }
 
 }  // namespace Solver

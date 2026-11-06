@@ -95,7 +95,15 @@ struct Joint {
 struct Frame {
     QVector<Shape> shapes;     // back-to-front (index = z order)
     QVector<Joint> joints;
-    int durationMs = 100;
+    int durationMs = 100;     // for a tween frame: duration of EACH generated in-between
+    // Dynamic tween: when tweenCount > 0 this frame holds no shapes; it stands for
+    // tweenCount in-betweens computed live from the keyframes before and after it.
+    int tweenCount = 0;
+    int tweenEase = 1;        // Solver::ease mode
+    double tweenSquash = 0;   // 0..1
+    int tweenPath = 0;        // 0 straight, 1 arc, 2 thrown (gravity)
+    double tweenArc = 0;      // arc / throw height in px
+    bool isTween() const { return tweenCount > 0; }
 
     int indexOf(int shapeId) const;
     Shape* find(int shapeId);
@@ -118,7 +126,8 @@ struct Document {
     QVector<Frame> frames;          // frames of the ACTIVE chapter (the live copy everything edits)
     QVector<Chapter> chapters;      // all chapters in order
     int activeChapter = 0;
-    QHash<QString, QImage> images;  // content-hash -> image, shared by all frames and chapters
+    QHash<QString, QImage> images;  // content-hash -> decoded image, shared by all frames and chapters
+    QHash<QString, QByteArray> imageFiles;  // same keys: the encoded file bytes that get saved (original when possible)
     int nextId = 1;
 
     Document()
@@ -127,6 +136,17 @@ struct Document {
         chapters.append(Chapter{QStringLiteral("Chapter 1"), {}});
     }
     int newId() { return nextId++; }
+    void setImage(const QString& key, const QImage& img, const QByteArray& fileBytes)
+    {
+        images.insert(key, img.convertToFormat(QImage::Format_ARGB32_Premultiplied));
+        imageFiles.insert(key, fileBytes);
+    }
+    void copyImageFrom(const Document& src, const QString& key)  // no-op if already present
+    {
+        if (images.contains(key) || !src.images.contains(key)) return;
+        images.insert(key, src.images.value(key));
+        if (src.imageFiles.contains(key)) imageFiles.insert(key, src.imageFiles.value(key));
+    }
     const QVector<Frame>& chapterFrames(int c) const { return c == activeChapter ? frames : chapters.at(c).frames; }
     int totalFrames() const
     {
@@ -148,6 +168,9 @@ struct Document {
     bool save(const QString& path, QString* err) const;
     static bool load(const QString& path, Document& out, QString* err);
 };
+
+// JPEG (quality 92) for opaque images, PNG when there is transparency.
+QByteArray encodeImage(const QImage& img);
 
 QString shapeTypeName(ShapeType t);
 QString jointTypeName(JointType t);

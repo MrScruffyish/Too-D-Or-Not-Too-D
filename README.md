@@ -66,7 +66,13 @@ Save objects for reuse with **Add Selection to Library** (Ctrl+B). Select a few 
 
 ## Frames / animation
 - **New Frame (copy)** adds a copy of the current frame for you to modify. **Duplicate ×N** adds held copies. Each frame has its own **Duration**.
-- **Tween** generates in-between frames from the current frame to the next, with easing. Connected shapes follow their joint angles, so they stay attached. **Squash & stretch** stretches unconnected shapes along their direction of motion. Shapes that exist in only one of the two frames fade in or out.
+- **Tween** (Ctrl+T) generates in-between frames from the current keyframe to the next. Connected shapes follow their joint angles, so they stay attached. Shapes that exist in only one of the two frames fade in or out.
+  - **Dynamic** (default): inserts one live tween item (◆, orange) in the frame strip. Its in-betweens are recalculated from the keyframes before and after it, so editing those keyframes, or inserting new ones, updates it immediately. Select it to change its settings, or **Bake** it into normal frames. On the canvas it shows its middle frame, read-only.
+  - **Static**: creates normal frames right away, which you can then edit individually.
+  - **Easing:** linear, ease in-out (accelerate, then decelerate), ease in, ease out, strong in-out, overshoot, bounce.
+  - **Path:** straight; *arc* (curves sideways by a set height); *thrown* (gravity parabola with constant sideways speed, like a basketball); or *smooth through keyframes* (a spline). For a throw with exact control, add a keyframe at the top of the arc and give both tweens the smooth path: together they form one smooth curve.
+  - **Squash & stretch** stretches unconnected shapes along their direction of motion.
+  - **Motion paths** (Ctrl+M): on a tween, or on a keyframe next to one, a dashed path with dots and faint outlines shows where the shapes go.
 - **Onion skin** (Ctrl+K) shows the previous frame faintly. **Play** previews the animation.
 
 | Key | Action |
@@ -89,7 +95,15 @@ A project is split into **chapters**, and you work on one at a time (Chapter sel
 - **Export Animation** (Ctrl+Shift+E) offers **MP4** (H.264), WebM (VP9), GIF or a PNG sequence. Choose the whole movie (all chapters merged), the current chapter, or a frame range. GIF keeps each frame's exact duration (built-in encoder). MP4/WebM use a constant frame rate and repeat frames to match durations (needs ffmpeg).
 - **Export Current Frame** (Ctrl+E) offers PNG, JPG (with a scale factor) or SVG.
 
-Projects are saved as `.tood` files (JSON). Images are embedded once and shared by all frames. Recent projects are listed under File and in the start dialog.
+Projects are saved as `.tood` files: **gzip-compressed JSON**. Images are embedded once (as the original file bytes, so a JPEG stays a JPEG) and shared by all frames, so using an image in many frames costs almost nothing. Images much larger than the canvas are scaled to 2× the canvas size when inserted. **File > Optimize Images** shrinks each image to 2× the largest size it is shown at in the project; Undo restores the originals. Recent projects are listed under File and in the start dialog.
+
+The files can be inspected and edited with standard tools:
+```sh
+zcat project.tood | jq . | less          # view
+zcat project.tood > project.json         # decompress, edit by hand…
+gzip -c project.json > project.tood      # …and compress again
+```
+Plain (uncompressed) JSON `.tood` files also open, so files from older versions and hand-edited ones still work. They are saved compressed the next time.
 
 ## Code
 | File | Contents |

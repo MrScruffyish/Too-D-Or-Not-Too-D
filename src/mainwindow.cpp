@@ -676,6 +676,16 @@ void MainWindow::buildActions()
     m_actSnapPts = act(tr("Snap points"), QKeySequence(tr("F9")), [this] { m_canvas->snapPoints = m_actSnapPts->isChecked(); });
     m_actOrtho = act(tr("Ortho"), QKeySequence(tr("F8")), [this] { m_canvas->ortho = m_actOrtho->isChecked(); });
     m_actSticky = act(tr("Sticky ends"), QKeySequence(), [this] { m_canvas->stickyEnds = m_actSticky->isChecked(); });
+    m_actMotion = act(tr("Motion paths"), QKeySequence(tr("Ctrl+M")), [this] {
+        m_canvas->showMotion = m_actMotion->isChecked();
+        m_canvas->viewport()->update();
+    });
+    m_actMotion->setCheckable(true);
+    m_actMotion->setChecked(true);
+    connect(m_actMotion, &QAction::hovered, this, [this] {
+        setPrompt(tr("Motion paths (Ctrl+M): dashed path and faint outlines of the in-betweens of dynamic tweens, "
+                     "shown on the tween and on the keyframes next to it."));
+    });
     m_actOnion = act(tr("Onion skin"), QKeySequence(tr("Ctrl+K")), [this] { m_canvas->setOnion(m_actOnion->isChecked()); });
     m_actJoints = act(tr("Connections"), QKeySequence(tr("Ctrl+J")), [this] {
         m_canvas->showJoints = m_actJoints->isChecked();
@@ -728,6 +738,11 @@ void MainWindow::buildMenus()
     f->addActions({m_actSave, m_actSaveAs});
     f->addSeparator();
     f->addActions({m_actImage, m_actDocSettings});
+    QAction* opt = f->addAction(tr("Optimize Images…"), this, [this] { optimizeImages(); });
+    connect(opt, &QAction::hovered, this, [this] {
+        setPrompt(tr("Optimize images: scales each image down to twice the largest size it is shown at anywhere in the "
+                     "project (e.g. an 8000×4000 photo in a 100×50 box becomes 200×100). Undo restores the originals."));
+    });
     f->addSeparator();
     f->addActions({m_actExportFrame, m_actExportAnim});
     f->addSeparator();
@@ -769,7 +784,7 @@ void MainWindow::buildMenus()
     QMenu* v = menuBar()->addMenu(tr("&View"));
     v->addActions({m_actZoomIn, m_actZoomOut, m_actFit});
     v->addSeparator();
-    v->addActions({m_actGrid, m_actSnap, m_actSnapPts, m_actOrtho, m_actSticky, m_actOnion, m_actJoints});
+    v->addActions({m_actGrid, m_actSnap, m_actSnapPts, m_actOrtho, m_actSticky, m_actOnion, m_actMotion, m_actJoints});
     v->addSeparator();
     for (QDockWidget* d : findChildren<QDockWidget*>()) v->addAction(d->toggleViewAction());
 }
@@ -830,7 +845,7 @@ void MainWindow::buildToolbars()
     });
     tb->addWidget(m_jointCombo);
     tb->addSeparator();
-    tb->addActions({m_actSnapPts, m_actOrtho, m_actSticky, m_actGrid, m_actSnap, m_actOnion, m_actJoints});
+    tb->addActions({m_actSnapPts, m_actOrtho, m_actSticky, m_actGrid, m_actSnap, m_actOnion, m_actMotion, m_actJoints});
     tb->addSeparator();
     tb->addAction(m_actFit);
 
@@ -1180,6 +1195,42 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     m_jForm->addRow(m_jInfo);
     m_jForm->addRow(jb);
     v->addWidget(m_jointBox);
+
+    m_tweenBox = new QGroupBox(tr("Dynamic tween"));
+    auto* tf = new QFormLayout(m_tweenBox);
+    m_twCount = new QSpinBox;
+    m_twCount->setRange(1, 500);
+    m_twCount->setKeyboardTracking(false);
+    m_twEase = new QComboBox;
+    m_twEase->addItems(Solver::easeNames());
+    m_twPath = new QComboBox;
+    m_twPath->addItems(Solver::pathNames());
+    m_twArc = new QSpinBox;
+    m_twArc->setRange(-5000, 5000);
+    m_twArc->setSuffix(tr(" px"));
+    m_twArc->setKeyboardTracking(false);
+    m_twSquash = new QSpinBox;
+    m_twSquash->setRange(0, 100);
+    m_twSquash->setSuffix(QStringLiteral(" %"));
+    m_twSquash->setKeyboardTracking(false);
+    m_twInfo = new QLabel;
+    m_twInfo->setWordWrap(true);
+    auto* bake = new QPushButton(tr("Bake into normal frames"));
+    bake->setToolTip(tr("Replace this live tween with ordinary, editable frames (static)"));
+    tf->addRow(tr("In-between frames"), m_twCount);
+    tf->addRow(tr("Easing"), m_twEase);
+    tf->addRow(tr("Path"), m_twPath);
+    tf->addRow(tr("Arc / throw height"), m_twArc);
+    tf->addRow(tr("Squash && stretch"), m_twSquash);
+    tf->addRow(m_twInfo);
+    tf->addRow(bake);
+    v->addWidget(m_tweenBox);
+    connect(m_twCount, &QSpinBox::valueChanged, this, [this](int n) { editTween([n](Frame& f) { f.tweenCount = n; }, tr("Tween frames"), 41); });
+    connect(m_twEase, &QComboBox::currentIndexChanged, this, [this](int e) { editTween([e](Frame& f) { f.tweenEase = e; }, tr("Tween easing"), 42); });
+    connect(m_twSquash, &QSpinBox::valueChanged, this, [this](int q) { editTween([q](Frame& f) { f.tweenSquash = q / 100.0; }, tr("Tween squash"), 43); });
+    connect(m_twPath, &QComboBox::currentIndexChanged, this, [this](int p) { editTween([p](Frame& f) { f.tweenPath = p; }, tr("Tween path"), 44); });
+    connect(m_twArc, &QSpinBox::valueChanged, this, [this](int a) { editTween([a](Frame& f) { f.tweenArc = a; }, tr("Tween arc"), 45); });
+    connect(bake, &QPushButton::clicked, this, [this] { tweenBake(); });
     v->addStretch();
 
     // ---- edits
@@ -1308,6 +1359,7 @@ void MainWindow::commit(const QString& text, int mergeId)
     m_committedFrame = m_cur;
     refreshTimeline();
     updateTitle();
+    if (!m_playing) updateCanvasFrame();  // tweens next to an edited keyframe follow immediately
 }
 
 void MainWindow::applySnapshot(const Document& d, int frame)
@@ -1346,7 +1398,24 @@ void MainWindow::setCurrentFrame(int i, bool fromTimeline)
     m_updatingProps = true;
     m_dur->setValue(m_doc.frames.at(i).durationMs);
     m_updatingProps = false;
+    updateCanvasFrame();
     refreshProps();
+}
+
+// Cache key for a dynamic tween's thumbnail: changes when either keyframe or a setting changes.
+static QString tweenThumbKey(const QVector<Frame>& fr, int i, int* ia = nullptr, int* ib = nullptr)
+{
+    int a = i - 1, b = i + 1;
+    while (a >= 0 && fr.at(a).isTween()) --a;
+    while (b < fr.size() && fr.at(b).isTween()) ++b;
+    if (ia) *ia = a;
+    if (ib) *ib = b;
+    if (a < 0 || b >= fr.size()) return QStringLiteral("none");
+    const Frame& t = fr.at(i);
+    return QStringLiteral("%1:%2:%3:%4:%5:%6:%7:%8:%9")
+        .arg(quintptr(fr.at(a).shapes.constData())).arg(quintptr(fr.at(b).shapes.constData()))
+        .arg(quintptr(fr.at(a).joints.constData())).arg(quintptr(fr.at(b).joints.constData()))
+        .arg(t.tweenCount).arg(t.tweenEase).arg(t.tweenSquash).arg(t.tweenPath).arg(t.tweenArc);
 }
 
 void MainWindow::refreshTimeline()
@@ -1359,10 +1428,31 @@ void MainWindow::refreshTimeline()
     qint64 total = 0;
     for (int i = 0; i < n; ++i) {
         const Frame& f = m_doc.frames.at(i);
-        total += f.durationMs;
+        total += Solver::frameSpanMs(m_doc.frames, i);
         QListWidgetItem* it = m_timeline->item(i);
-        const QString txt = QStringLiteral("%1 · %2 ms").arg(i + 1).arg(f.durationMs);
+        const QString txt = f.isTween() ? QStringLiteral("%1 · ◆ tween ×%2").arg(i + 1).arg(f.tweenCount)
+                                        : QStringLiteral("%1 · %2 ms").arg(i + 1).arg(f.durationMs);
         if (it->text() != txt) it->setText(txt);
+        if (f.isTween()) {
+            it->setBackground(QColor(255, 222, 160));
+            it->setToolTip(tr("Dynamic tween: %1 frames × %2 ms, computed from the neighbouring keyframes").arg(f.tweenCount).arg(f.durationMs));
+            const QString tk = tweenThumbKey(m_doc.frames, i);
+            auto tt = m_tweenThumbs.constFind(tk);
+            if (tt == m_tweenThumbs.constEnd()) {
+                missing = true;
+            } else if (it->data(Qt::UserRole + 1).toString() != tk) {
+                it->setIcon(tt->icon);
+                it->setData(Qt::UserRole + 1, tk);
+                it->setData(Qt::UserRole, QVariant());
+            }
+            continue;
+        }
+        if (it->data(Qt::UserRole + 1).isValid()) {  // was a tween item before
+            it->setData(Qt::UserRole + 1, QVariant());
+            it->setData(Qt::UserRole, QVariant());
+            it->setBackground(QBrush());
+            it->setToolTip(QString());
+        }
         const void* key = f.shapes.constData();
         const quintptr k = quintptr(key);
         if (it->data(Qt::UserRole).value<quintptr>() == k && !it->icon().isNull()) continue;
@@ -1381,7 +1471,7 @@ void MainWindow::refreshTimeline()
 
     qint64 all = 0;
     for (int c = 0; c < m_doc.chapters.size(); ++c)
-        for (const Frame& f : m_doc.chapterFrames(c)) all += f.durationMs;
+        for (int i = 0; i < m_doc.chapterFrames(c).size(); ++i) all += Solver::frameSpanMs(m_doc.chapterFrames(c), i);
     QString info = tr("%1 frames · %2 s").arg(n).arg(total / 1000.0, 0, 'f', 2);
     if (m_doc.chapters.size() > 1)
         info += tr("   (project: %1 chapters, %2 frames, %3 s)").arg(m_doc.chapters.size()).arg(m_doc.totalFrames()).arg(all / 1000.0, 0, 'f', 1);
@@ -1411,7 +1501,25 @@ void MainWindow::renderThumbs()
     timer.start();
     bool more = false;
     for (int k = 0; k < n; ++k) {
-        const Frame& f = m_doc.frames.at((first + k) % n);
+        const int fi = (first + k) % n;
+        const Frame& f = m_doc.frames.at(fi);
+        if (f.isTween()) {
+            int a = -1, b = -1;
+            const QString tk = tweenThumbKey(m_doc.frames, fi, &a, &b);
+            if (m_tweenThumbs.contains(tk)) continue;
+            if (timer.elapsed() > 30) {
+                more = true;
+                break;
+            }
+            const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, fi);
+            QImage img = gen.isEmpty() ? QImage(ts, QImage::Format_ARGB32_Premultiplied)
+                                       : renderFrameImage(m_doc, gen.at(gen.size() / 2), sc, true, Qt::white);
+            if (gen.isEmpty()) img.fill(QColor(255, 222, 160));
+            if (m_tweenThumbs.size() > 500) m_tweenThumbs.clear();
+            m_tweenThumbs.insert(tk, TweenThumb{a >= 0 ? m_doc.frames.at(a).shapes : QVector<Shape>(),
+                                                b < n ? m_doc.frames.at(b).shapes : QVector<Shape>(), QIcon(QPixmap::fromImage(img))});
+            continue;
+        }
         const void* key = f.shapes.constData();
         if (m_thumbs.contains(key)) continue;
         if (timer.elapsed() > 30) {
@@ -1432,6 +1540,26 @@ void MainWindow::refreshProps()
     const QVector<int> ids = m_canvas->selectedIds();
     const Shape* s = ids.isEmpty() ? nullptr : f.find(ids.first());
     const int ji = f.jointIndex(m_canvas->selectedJoint());
+    const Frame& cf = m_doc.frames.at(m_cur);
+    m_tweenBox->setVisible(cf.isTween());
+    if (cf.isTween()) {
+        m_shapeBox->setVisible(false);
+        m_jointBox->setVisible(false);
+        m_hint->setVisible(false);
+        m_twCount->setValue(cf.tweenCount);
+        m_twEase->setCurrentIndex(cf.tweenEase);
+        m_twSquash->setValue(qRound(cf.tweenSquash * 100));
+        m_twPath->setCurrentIndex(cf.tweenPath);
+        m_twArc->setValue(qRound(cf.tweenArc));
+        m_tweenBox->layout()->setEnabled(true);
+        if (auto* fl = qobject_cast<QFormLayout*>(m_tweenBox->layout())) fl->setRowVisible(m_twArc, cf.tweenPath == 1 || cf.tweenPath == 2);
+        const bool ok = !Solver::tweenFrames(m_doc.frames, m_cur).isEmpty();
+        m_twInfo->setText(ok ? tr("Live in-betweens from the keyframe before to the keyframe after. Edit those keyframes "
+                                  "(or insert new ones) and this follows. Duration per frame: the Duration box below the canvas.")
+                             : tr("⚠ Needs a keyframe both before and after it."));
+        m_updatingProps = false;
+        return;
+    }
     m_shapeBox->setVisible(s);
     m_jointBox->setVisible(!s && ji >= 0);
     m_hint->setVisible(!s && ji < 0);
@@ -1665,6 +1793,7 @@ void MainWindow::insertImage(const QString& pathIn, QPointF at)
         if (maybeSave()) openPath(path);
         return;
     }
+    if (!requireKeyframe()) return;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return;
     const QByteArray bytes = file.readAll();
@@ -1678,7 +1807,23 @@ void MainWindow::insertImage(const QString& pathIn, QPointF at)
         return;
     }
     const QString key = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex().left(24));
-    if (!m_doc.images.contains(key)) m_doc.images.insert(key, img.convertToFormat(QImage::Format_ARGB32_Premultiplied));
+    if (!m_doc.images.contains(key)) {
+        // Keep the original file bytes. Only images far larger than the canvas are
+        // downscaled (to 2x the canvas, still sharp at 2x export).
+        const int cap = 2 * qMax(m_doc.width, m_doc.height);
+        QImage stored = img;
+        QByteArray file = bytes;
+        if (qMax(img.width(), img.height()) > cap) {
+            stored = img.scaled(cap, cap, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            file = encodeImage(stored);
+            log(tr("Large image %1×%2 scaled to %3×%4 (%5 KB → %6 KB). File > Optimize Images can shrink it further later.")
+                    .arg(img.width()).arg(img.height()).arg(stored.width()).arg(stored.height())
+                    .arg(bytes.size() / 1024).arg(file.size() / 1024));
+        } else if (QImage probe; !probe.loadFromData(bytes)) {
+            file = encodeImage(img);  // e.g. SVG: store a raster version
+        }
+        m_doc.setImage(key, stored, file);
+    }
 
     Shape s;
     s.id = m_doc.newId();
@@ -1797,14 +1942,22 @@ void MainWindow::exportAnimation()
     connect(range, &QComboBox::currentIndexChanged, &dlg, updRange);
     if (dlg.exec() != QDialog::Accepted) return;
 
-    QVector<Frame> seq;  // the frames to export, in order (cheap shared copies)
+    QVector<Frame> seq;  // the frames to export, in order (cheap shared copies), dynamic tweens expanded
+    auto expandRange = [](const QVector<Frame>& fr, int a0, int a1) {
+        QVector<Frame> out;
+        for (int i = a0; i <= a1 && i < fr.size(); ++i) {
+            if (fr.at(i).isTween()) out += Solver::tweenFrames(fr, i);
+            else out << fr.at(i);
+        }
+        return out;
+    };
     if (range->currentIndex() == 0) {
-        for (int c = 0; c < m_doc.chapters.size(); ++c) seq += m_doc.chapterFrames(c);
+        for (int c = 0; c < m_doc.chapters.size(); ++c) seq += expandRange(m_doc.chapterFrames(c), 0, m_doc.chapterFrames(c).size() - 1);
     } else if (range->currentIndex() == 1) {
-        seq = m_doc.frames;
+        seq = expandRange(m_doc.frames, 0, m_doc.frames.size() - 1);
     } else {
         const int a0 = qMin(from->value(), to->value()) - 1, a1 = qMax(from->value(), to->value()) - 1;
-        seq = m_doc.frames.mid(a0, a1 - a0 + 1);
+        seq = expandRange(m_doc.frames, a0, a1);
     }
 
     enum { MP4, GIF, WEBM, PNGS };
@@ -1989,6 +2142,7 @@ void MainWindow::duplicateSel()
 // Joints, glued line ends and groups inside the pasted set are kept.
 void MainWindow::pasteShapes(const QVector<Shape>& shapes, const QVector<Joint>& joints, bool forceNew, bool nudge)
 {
+    if (!requireKeyframe()) return;
     Frame& f = curFrame();
     QHash<int, int> remap, groupMap;
     bool anyNew = false;
@@ -2026,6 +2180,7 @@ void MainWindow::pasteShapes(const QVector<Shape>& shapes, const QVector<Joint>&
 
 void MainWindow::deleteSel()
 {
+    if (!requireKeyframe()) return;
     Frame& f = curFrame();
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.isEmpty()) {
@@ -2046,6 +2201,7 @@ void MainWindow::deleteSel()
 
 void MainWindow::reorder(int mode)
 {
+    if (!requireKeyframe()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.isEmpty()) return;
     const QSet<int> sel(ids.cbegin(), ids.cend());
@@ -2067,6 +2223,7 @@ void MainWindow::reorder(int mode)
 
 void MainWindow::disconnectSel()
 {
+    if (!requireKeyframe()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.isEmpty()) return;
     Frame& f = curFrame();
@@ -2082,6 +2239,7 @@ void MainWindow::disconnectSel()
 
 void MainWindow::groupSel()
 {
+    if (!requireKeyframe()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.size() < 2) {
         log(tr("Select at least two shapes to group."));
@@ -2099,6 +2257,7 @@ void MainWindow::groupSel()
 
 void MainWindow::ungroupSel()
 {
+    if (!requireKeyframe()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     Frame& f = curFrame();
     int n = 0;
@@ -2155,7 +2314,7 @@ void MainWindow::editText(int id)
 
 void MainWindow::editSingle(const std::function<void(Frame&, int, Shape&)>& fn, const QString& text, int field)
 {
-    if (m_updatingProps) return;
+    if (m_updatingProps || m_doc.frames.at(m_cur).isTween()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.size() != 1) return;
     Frame& f = curFrame();
@@ -2169,7 +2328,7 @@ void MainWindow::editSingle(const std::function<void(Frame&, int, Shape&)>& fn, 
 
 void MainWindow::editAll(const std::function<void(Shape&)>& fn, const QString& text, int field)
 {
-    if (m_updatingProps) return;
+    if (m_updatingProps || m_doc.frames.at(m_cur).isTween()) return;
     const QVector<int> ids = m_canvas->selectedIds();
     if (ids.isEmpty()) return;
     Frame& f = curFrame();
@@ -2214,10 +2373,76 @@ void MainWindow::setStyleStroke(const QColor& c)
 
 // ================================================================ frames
 
+bool MainWindow::requireKeyframe()
+{
+    if (!m_doc.frames.at(m_cur).isTween()) return true;
+    log(tr("This is a dynamic tween (computed frames). Edit the keyframe before or after it, or Bake it into normal frames."));
+    return false;
+}
+
+// Shows the current frame on the canvas: a normal frame is edited directly, a dynamic
+// tween shows its middle in-between read-only. Also sets the onion-skin frame.
+void MainWindow::updateCanvasFrame()
+{
+    if (m_playing) return;
+    const Frame& f = m_doc.frames.at(m_cur);
+    if (f.isTween()) {
+        const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
+        const Frame mid = gen.isEmpty() ? Frame() : gen.at(gen.size() / 2);
+        m_canvas->setSelectedIds({});
+        m_canvas->setDisplayFrame(&mid);
+        m_canvas->setReadOnly(true);
+    } else {
+        m_canvas->setDisplayFrame(nullptr);
+        m_canvas->setReadOnly(false);
+    }
+    // motion paths: the tween itself, or the tweens next to the keyframe being edited
+    {
+        QVector<Frame> ghosts;
+        const auto keyBefore = [this](int i) { while (i >= 0 && m_doc.frames.at(i).isTween()) --i; return i; };
+        const auto keyAfter = [this](int i) { while (i < m_doc.frames.size() && m_doc.frames.at(i).isTween()) ++i; return i; };
+        if (f.isTween()) {
+            const int a = keyBefore(m_cur - 1), b = keyAfter(m_cur + 1);
+            const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
+            if (!gen.isEmpty() && a >= 0 && b < m_doc.frames.size()) ghosts << m_doc.frames.at(a) << gen << m_doc.frames.at(b);
+        } else {
+            if (m_cur > 0 && m_doc.frames.at(m_cur - 1).isTween()) {
+                const int a = keyBefore(m_cur - 1);
+                const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur - 1);
+                if (a >= 0 && !gen.isEmpty()) ghosts << m_doc.frames.at(a) << gen;
+            }
+            ghosts << f;
+            if (m_cur + 1 < m_doc.frames.size() && m_doc.frames.at(m_cur + 1).isTween()) {
+                const int b = keyAfter(m_cur + 1);
+                const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur + 1);
+                if (b < m_doc.frames.size() && !gen.isEmpty()) ghosts << gen << m_doc.frames.at(b);
+            }
+            if (ghosts.size() == 1) ghosts.clear();
+        }
+        m_canvas->setGhosts(ghosts);
+    }
+    if (m_cur > 0) {
+        const Frame& prev = m_doc.frames.at(m_cur - 1);
+        if (prev.isTween()) {
+            const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur - 1);
+            if (gen.isEmpty()) m_canvas->setOnionFrame(nullptr);
+            else m_canvas->setOnionFrame(&gen.constLast());
+        } else {
+            m_canvas->setOnionFrame(&prev);
+        }
+    } else {
+        m_canvas->setOnionFrame(nullptr);
+    }
+}
+
 void MainWindow::frameNewCopy()
 {
     m_canvas->finishSpring(true);
-    const Frame copy = m_doc.frames.at(m_cur);  // shares data until modified
+    Frame copy = m_doc.frames.at(m_cur);  // shares data until modified
+    if (copy.isTween()) {  // make a real keyframe from what the tween shows
+        const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
+        copy = gen.isEmpty() ? Frame() : gen.at(gen.size() / 2);
+    }
     m_doc.frames.insert(m_cur + 1, copy);
     m_cur += 1;
     m_canvas->setFrameIndex(m_cur);
@@ -2239,6 +2464,7 @@ void MainWindow::frameNewBlank()
 
 void MainWindow::frameDuplicateN()
 {
+    if (!requireKeyframe()) return;
     bool ok = false;
     const int n = QInputDialog::getInt(this, tr("Duplicate frame"), tr("Number of copies to insert after frame %1:").arg(m_cur + 1),
                                        1, 1, 1000, 1, &ok);
@@ -2278,19 +2504,32 @@ void MainWindow::frameMove(int dir)
 
 void MainWindow::frameTween()
 {
-    if (m_cur + 1 >= m_doc.frames.size()) {
-        log(tr("Tween needs a next frame: make one with \"New Frame (copy)\", change it, then select the first frame and run Tween."));
+    if (!requireKeyframe()) return;
+    if (m_cur + 1 >= m_doc.frames.size() || m_doc.frames.at(m_cur + 1).isTween()) {
+        log(tr("Tween needs a next keyframe: make one with \"New Frame (copy)\", change it, then select the first frame and run Tween."));
         return;
     }
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Tween frames %1 → %2").arg(m_cur + 1).arg(m_cur + 2));
     auto* fl = new QFormLayout(&dlg);
+    auto* mode = new QComboBox;
+    mode->addItems({tr("Dynamic: one live tween frame (updates when you edit the keyframes)"),
+                    tr("Static: create normal frames now")});
+    mode->setCurrentIndex(QSettings().value("tweenMode", 0).toInt());
     auto* count = new QSpinBox;
     count->setRange(1, 500);
     count->setValue(5);
     auto* easing = new QComboBox;
-    easing->addItems({tr("Linear"), tr("Ease in-out"), tr("Ease in"), tr("Ease out")});
+    easing->addItems(Solver::easeNames());
     easing->setCurrentIndex(1);
+    auto* path = new QComboBox;
+    path->addItems(Solver::pathNames());
+    path->setToolTip(tr("Thrown = like a ball: constant sideways speed, up and down under gravity"));
+    auto* arc = new QSpinBox;
+    arc->setRange(-5000, 5000);
+    arc->setValue(100);
+    arc->setSuffix(tr(" px"));
+    arc->setToolTip(tr("How far the path bends (arc) or how high it goes (thrown). Negative = the other way."));
     auto* dur = new QSpinBox;
     dur->setRange(10, 60000);
     dur->setSingleStep(10);
@@ -2302,34 +2541,71 @@ void MainWindow::frameTween()
     squash->setToolTip(tr("Stretch unconnected shapes along their motion (cartoon squash & stretch)"));
     auto* note = new QLabel(tr("Shapes are matched by identity (frames made with \"New Frame (copy)\" share them). "
                                "Connected shapes are interpolated by joint angles so they stay attached; "
-                               "shapes in only one frame fade in/out."));
+                               "shapes in only one frame fade in/out. A dynamic tween can be changed or baked later."));
     note->setWordWrap(true);
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    fl->addRow(tr("Type"), mode);
     fl->addRow(tr("In-between frames"), count);
     fl->addRow(tr("Easing"), easing);
+    fl->addRow(tr("Path"), path);
+    fl->addRow(tr("Arc / throw height"), arc);
     fl->addRow(tr("Duration each"), dur);
     fl->addRow(tr("Squash && stretch"), squash);
     fl->addRow(note);
     fl->addRow(bb);
     if (dlg.exec() != QDialog::Accepted) return;
+    QSettings().setValue("tweenMode", mode->currentIndex());
 
-    const Frame a = m_doc.frames.at(m_cur), b = m_doc.frames.at(m_cur + 1);
-    const int n = count->value(), em = easing->currentIndex();
-    QVector<Frame> mids;
-    mids.reserve(n);
-    for (int k = 1; k <= n; ++k) {
-        Solver::TweenOptions opt;
-        opt.squash = squash->value() / 100.0;
-        opt.motionStep = Solver::ease(qMin(1.0, (k + 0.5) / (n + 1)), em) - Solver::ease(qMax(0.0, (k - 0.5) / (n + 1)), em);
-        Frame t = Solver::tween(a, b, Solver::ease(double(k) / (n + 1), em), opt);
+    const int n = count->value();
+    if (mode->currentIndex() == 0) {
+        Frame t;
+        t.tweenCount = n;
+        t.tweenEase = easing->currentIndex();
+        t.tweenSquash = squash->value() / 100.0;
+        t.tweenPath = path->currentIndex();
+        t.tweenArc = arc->value();
         t.durationMs = dur->value();
-        mids << t;
+        m_doc.frames.insert(m_cur + 1, t);
+        commit(tr("Dynamic tween"));
+        log(tr("Dynamic tween (%1 frames) inserted after frame %2. Edit the keyframes and it follows; "
+               "select it to change its settings or bake it.").arg(n).arg(m_cur + 1));
+        return;
     }
-    for (int k = 0; k < n; ++k) m_doc.frames.insert(m_cur + 1 + k, mids.at(k));
+    const QVector<Frame> mids = Solver::makeTweens(m_doc.frames.at(m_cur), m_doc.frames.at(m_cur + 1), n,
+                                                   easing->currentIndex(), squash->value() / 100.0, dur->value(),
+                                                   path->currentIndex(), arc->value(),
+                                                   m_cur > 0 && !m_doc.frames.at(m_cur - 1).isTween() ? &m_doc.frames.at(m_cur - 1) : nullptr,
+                                                   m_cur + 2 < m_doc.frames.size() && !m_doc.frames.at(m_cur + 2).isTween() ? &m_doc.frames.at(m_cur + 2) : nullptr);
+    for (int k = 0; k < mids.size(); ++k) m_doc.frames.insert(m_cur + 1 + k, mids.at(k));
     commit(tr("Tween"));
     log(tr("Inserted %1 in-between frames after frame %2").arg(n).arg(m_cur + 1));
+}
+
+// Replace the dynamic tween at the current position with normal (static) frames.
+void MainWindow::tweenBake()
+{
+    if (!m_doc.frames.at(m_cur).isTween()) return;
+    const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
+    if (gen.isEmpty()) {
+        log(tr("This tween has no keyframe before or after it; nothing to bake."));
+        return;
+    }
+    m_doc.frames.removeAt(m_cur);
+    for (int k = 0; k < gen.size(); ++k) m_doc.frames.insert(m_cur + k, gen.at(k));
+    m_canvas->setFrameIndex(m_cur);
+    commit(tr("Bake tween"));
+    setCurrentFrame(m_cur);
+    log(tr("Baked the tween into %1 normal frames.").arg(gen.size()));
+}
+
+void MainWindow::editTween(const std::function<void(Frame&)>& fn, const QString& text, int field)
+{
+    if (m_updatingProps || !m_doc.frames.at(m_cur).isTween()) return;
+    fn(m_doc.frames[m_cur]);
+    commit(text, mid(field));
+    updateCanvasFrame();
 }
 
 void MainWindow::setFrameDurations(int ms, bool all)
@@ -2346,38 +2622,62 @@ void MainWindow::setFrameDurations(int ms, bool all)
     if (changed) commit(tr("Frame duration"), all ? -1 : mid(40));
 }
 
+// Playback runs over the expanded frame list (dynamic tweens become their in-betweens).
 void MainWindow::togglePlay()
 {
     if (m_playing) {
         m_playing = false;
         m_playTimer.stop();
-        m_canvas->setReadOnly(false);
+        m_cur = m_playMap.value(m_playPos, m_cur);
+        m_playSeq.clear();
+        m_playMap.clear();
         m_actPlay->setText(tr("Play"));
         m_actPlay->setIcon(themeIcon("media-playback-start", QStyle::SP_MediaPlay));
+        m_canvas->setFrameIndex(m_cur);
+        setCurrentFrame(m_cur);
+        updateCanvasFrame();
         return;
     }
-    if (m_doc.frames.size() < 2) return;
+    m_playSeq.clear();
+    m_playMap.clear();
+    m_playPos = 0;
+    for (int i = 0; i < m_doc.frames.size(); ++i) {
+        const QVector<Frame> part = m_doc.frames.at(i).isTween() ? Solver::tweenFrames(m_doc.frames, i) : QVector<Frame>{m_doc.frames.at(i)};
+        if (i == m_cur) m_playPos = m_playSeq.size();
+        for (const Frame& f : part) {
+            m_playSeq << f;
+            m_playMap << i;
+        }
+    }
+    if (m_playSeq.size() < 2) return;
+    m_playPos = qBound(0, m_playPos, int(m_playSeq.size()) - 1);
     m_playing = true;
     m_canvas->setSelectedIds({});
+    m_canvas->setGhosts({});
     m_canvas->setReadOnly(true);
+    m_canvas->setDisplayFrame(&m_playSeq.at(m_playPos));
     m_actPlay->setText(tr("Stop"));
     m_actPlay->setIcon(themeIcon("media-playback-stop", QStyle::SP_MediaStop));
-    m_playTimer.start(qMax(10, m_doc.frames.at(m_cur).durationMs));
+    m_playTimer.start(qMax(10, m_playSeq.at(m_playPos).durationMs));
 }
 
 void MainWindow::playStep()
 {
     if (!m_playing) return;
-    int next = m_cur + 1;
-    if (next >= m_doc.frames.size()) {
+    int next = m_playPos + 1;
+    if (next >= m_playSeq.size()) {
         if (!m_loop->isChecked()) {
             togglePlay();
             return;
         }
         next = 0;
     }
-    setCurrentFrame(next);
-    m_playTimer.start(qMax(10, m_doc.frames.at(m_cur).durationMs));
+    m_playPos = next;
+    m_canvas->setDisplayFrame(&m_playSeq.at(m_playPos));
+    m_updatingTimeline = true;
+    m_timeline->setCurrentRow(m_playMap.at(m_playPos), QItemSelectionModel::ClearAndSelect);
+    m_updatingTimeline = false;
+    m_playTimer.start(qMax(10, m_playSeq.at(m_playPos).durationMs));
 }
 
 // ================================================================ chapters
@@ -2528,8 +2828,7 @@ void MainWindow::chapterImport()
         m_doc.chapters.append(Chapter{d.chapters.at(c).name, frames});
     }
     m_doc.nextId = off + d.nextId;
-    for (auto it = d.images.cbegin(); it != d.images.cend(); ++it)
-        if (!m_doc.images.contains(it.key())) m_doc.images.insert(it.key(), it.value());
+    for (auto it = d.images.cbegin(); it != d.images.cend(); ++it) m_doc.copyImageFrom(d, it.key());
     commit(tr("Import chapters"));
     refreshChapters();
     refreshTimeline();
@@ -2552,6 +2851,7 @@ void MainWindow::chapterExport()
     d.frames = m_doc.frames;
     d.chapters = {Chapter{name, {}}};
     d.images = m_doc.images;
+    d.imageFiles = m_doc.imageFiles;
     d.nextId = m_doc.nextId;
     QString err;
     if (!d.save(p, &err)) QMessageBox::warning(this, tr("Export failed"), err);
@@ -2650,7 +2950,7 @@ void MainWindow::libraryAdd()
     d.background = Qt::transparent;
     d.frames = {item};
     for (const Shape& s : item.shapes)
-        if (s.type == ShapeType::Image && m_doc.images.contains(s.imageKey)) d.images.insert(s.imageKey, m_doc.images.value(s.imageKey));
+        if (s.type == ShapeType::Image) d.copyImageFrom(m_doc, s.imageKey);
     d.nextId = m_doc.nextId;
     QString err;
     if (!d.save(path, &err)) {
@@ -2670,8 +2970,7 @@ void MainWindow::libraryInsert(const QString& path, QPointF at)
         log(tr("Could not load library item: %1").arg(err));
         return;
     }
-    for (auto it = d.images.cbegin(); it != d.images.cend(); ++it)
-        if (!m_doc.images.contains(it.key())) m_doc.images.insert(it.key(), it.value());
+    for (auto it = d.images.cbegin(); it != d.images.cend(); ++it) m_doc.copyImageFrom(d, it.key());
     const QPointF centre = qIsNaN(at.x()) ? m_canvas->mapToScene(m_canvas->viewport()->rect().center()) : at;
     const QPointF off = centre - QPointF(d.width / 2.0, d.height / 2.0);
     QVector<Shape> shapes = d.frames.at(0).shapes;
@@ -2702,4 +3001,43 @@ void MainWindow::libraryDelete()
         return;
     QFile::remove(it->data(Qt::UserRole).toString());
     refreshLibrary();
+}
+
+// Scale every image down to 2x the largest size it is displayed at in the project.
+void MainWindow::optimizeImages()
+{
+    QHash<QString, QSizeF> need;
+    for (int c = 0; c < m_doc.chapters.size(); ++c)
+        for (const Frame& f : m_doc.chapterFrames(c))
+            for (const Shape& s : f.shapes) {
+                if (s.type != ShapeType::Image) continue;
+                const double sq = qMax(s.squash, 1.0 / qMax(0.05, s.squash));
+                QSizeF& n = need[s.imageKey];
+                n = QSizeF(qMax(n.width(), s.w * sq), qMax(n.height(), s.h * sq));
+            }
+    int changed = 0;
+    qint64 before = 0, after = 0;
+    for (auto it = need.cbegin(); it != need.cend(); ++it) {
+        const QImage img = m_doc.images.value(it.key());
+        if (img.isNull()) continue;
+        const double k = qMax(2 * it.value().width() / img.width(), 2 * it.value().height() / img.height());
+        if (k >= 0.67) continue;  // already about the right size
+        const QImage small = img.scaled(qMax(1, qCeil(img.width() * k)), qMax(1, qCeil(img.height() * k)),
+                                        Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        const QByteArray file = encodeImage(small);
+        before += m_doc.imageFiles.value(it.key()).size();
+        after += file.size();
+        m_doc.setImage(it.key(), small, file);
+        ++changed;
+    }
+    if (!changed) {
+        log(tr("Optimize images: all images are already close to the size they are used at."));
+        return;
+    }
+    m_canvas->clearPixmapCache();
+    m_thumbs.clear();
+    m_tweenThumbs.clear();
+    commit(tr("Optimize images"));
+    log(tr("Optimized %1 image(s): %2 KB → %3 KB. Undo (Ctrl+Z) restores the originals.")
+            .arg(changed).arg(before / 1024).arg(after / 1024));
 }

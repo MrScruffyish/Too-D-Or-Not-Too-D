@@ -71,8 +71,21 @@ public:
     void zoomBy(double f);
     void fitToCanvas();
     const QPixmap* pixmap(const QString& key);
+    void clearPixmapCache()  // after images were replaced (e.g. optimized)
+    {
+        m_pix.clear();
+        for (ShapeItem* it : std::as_const(m_items)) it->update();
+        viewport()->update();
+    }
 
     bool isSpringing() const { return m_springTimer.isActive(); }
+    // Show a computed frame instead of the document frame (dynamic tween, playback); nullptr = normal.
+    void setDisplayFrame(const Frame* f);
+    // Frame drawn faintly behind the current one when onion skin is on (nullptr = none).
+    void setOnionFrame(const Frame* f);
+    // In-between frames drawn as faint outlines + dashed motion paths (dynamic tweens).
+    void setGhosts(const QVector<Frame>& frames) { m_ghosts = frames; viewport()->update(); }
+    bool showMotion = true;
     void finishSpring(bool emitEdited);  // settle an elastic springback immediately
 
     // Options
@@ -120,7 +133,7 @@ private:
     enum Drag { DNone, DMove, DResize, DLineEnd, DRotate, DWarp, DCreate, DCreateText, DConnect, DJoint, DPan, DRubber };
 
     Frame& frame() { return m_doc->frames[m_frame]; }
-    const Frame& cframe() const { return m_doc->frames.at(m_frame); }
+    const Frame& cframe() const { return m_hasDisplay ? m_display : m_doc->frames.at(m_frame); }
     double viewScale() const { return transform().m11(); }
     QPointF snapPoint(QPointF p) const;
     // grid snap, or the nearest feature point of a shape within a few pixels
@@ -180,6 +193,10 @@ private:
     QVector<QPointF> m_steps;
     bool m_haveRef = false;
     QPointF m_refDir;
+
+    bool m_hasDisplay = false, m_hasOnion = false;
+    Frame m_display, m_onionFrame;
+    QVector<Frame> m_ghosts;
 
     // elastic springback
     QTimer m_springTimer;
