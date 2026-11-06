@@ -742,6 +742,7 @@ void Canvas::mousePressEvent(QMouseEvent* e)
             m_handle = h;
             if (h == 99) {
                 m_drag = DTail;
+                frame().find(m_dragId)->tailLink = EndLink();  // unglue while dragging
                 m_orig = *cframe().find(m_dragId);
                 return;
             }
@@ -1174,9 +1175,23 @@ void Canvas::mouseReleaseEvent(QMouseEvent* e)
     case DNode:
         if (m_moved) emit edited(tr("Move path point"));
         break;
-    case DTail:
-        if (m_moved) emit edited(tr("Move bubble tail"));
+    case DTail: {
+        ::Shape* s = frame().find(m_dragId);
+        if (!s) break;
+        const QPointF tip = s->toWorld(QPointF(s->tail.x() * s->w, s->tail.y() * s->h));
+        int tid = 0;
+        if (stickyEnds && !(e->modifiers() & Qt::ShiftModifier)) pickPoint(tip, m_dragId, &tid);
+        if (tid) {  // dropped on a shape: glue the tail tip to it
+            const ShapeItem* t = m_items.value(tid);
+            s->tailLink.target = tid;
+            s->tailLink.anchor = Solver::normalizeLocal(t->shapeData(), t->shapeData().toLocal(tip));
+            sync();
+            emit message(tr("Bubble tail glued to %1: it follows that shape (drag the tail away, or Unglue, to free it).")
+                             .arg(shapeTypeName(t->shapeData().type)));
+        }
+        if (m_moved || tid != m_orig.tailLink.target) emit edited(tid ? tr("Glue bubble tail") : tr("Move bubble tail"));
         break;
+    }
     case DFreehand: {
         QVector<QPointF> pts = m_drawPts;
         m_drawPts.clear();
@@ -1789,6 +1804,10 @@ void Canvas::drawForeground(QPainter* p, const QRectF& rect)
         p->setBrush(QColor(0, 140, 255));
         for (const ShapeItem* it : std::as_const(m_items)) {
             const ::Shape& s = it->shapeData();
+            if (s.type == ShapeType::Text && s.bubble && s.tailLink.target) {  // glued bubble tail
+                const QPointF c = s.toWorld(QPointF(s.tail.x() * s.w, s.tail.y() * s.h));
+                p->drawRect(QRectF(c.x() - 3.5 / sc, c.y() - 3.5 / sc, 7 / sc, 7 / sc));
+            }
             if (!s.hasLinks()) continue;
             for (int k = 0; k < 2; ++k)
                 if (s.ends[k].target) {

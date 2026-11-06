@@ -139,6 +139,35 @@ QColor lerpColor(const QColor& a, const QColor& b, double t)
                   l(a.alpha(), b.alpha()));
 }
 
+// Text in tweens: typewriter-style text, bubble size following the visible
+// text (keeping any manual resize factor), tail tip moving in real pixels.
+void tweenText(const Shape& a, const Shape& b, double t, Shape& s)
+{
+    const QString& ta = a.text;
+    const QString& tb = b.text;
+    if (ta != tb) {
+        int pre = 0;
+        while (pre < ta.size() && pre < tb.size() && ta[pre] == tb[pre]) ++pre;
+        const QString ra = ta.mid(pre), rb = tb.mid(pre);
+        if (ra.isEmpty()) s.text = tb.left(pre + qRound(rb.size() * t));            // typing more
+        else if (rb.isEmpty()) s.text = ta.left(pre + qRound(ra.size() * (1 - t)));  // deleting
+        else if (t < 0.5) s.text = ta.left(pre + qRound(ra.size() * (1 - 2 * t)));  // erase old ending…
+        else s.text = tb.left(pre + qRound(rb.size() * (2 * t - 1)));               // …then type the new one
+        Shape fa = a, fb = b, ft = s;  // fitted sizes; keep the keyframes' manual size factors
+        fitTextShape(fa);
+        fitTextShape(fb);
+        fitTextShape(ft);
+        const double kwa = a.w / qMax(1.0, fa.w), kwb = b.w / qMax(1.0, fb.w);
+        const double kha = a.h / qMax(1.0, fa.h), khb = b.h / qMax(1.0, fb.h);
+        s.w = ft.w * (kwa + (kwb - kwa) * t);
+        s.h = ft.h * (kha + (khb - kha) * t);
+    }
+    // tail tip: interpolate in local pixels, then normalise to the in-between size
+    const QPointF tipA(a.tail.x() * a.w, a.tail.y() * a.h), tipB(b.tail.x() * b.w, b.tail.y() * b.h);
+    const QPointF tip = tipA + (tipB - tipA) * t;
+    s.tail = QPointF(tip.x() / qMax(1.0, s.w), tip.y() / qMax(1.0, s.h));
+}
+
 Shape lerpShape(const Shape& a, const Shape& b, double t)
 {
     auto l = [t](double x, double y) { return x + (y - x) * t; };
@@ -153,7 +182,7 @@ Shape lerpShape(const Shape& a, const Shape& b, double t)
     s.stroke = lerpColor(a.stroke, b.stroke, t);
     s.accent = lerpColor(a.accent, b.accent, t);
     s.bubbleFill = lerpColor(a.bubbleFill, b.bubbleFill, t);
-    s.tail = a.tail + (b.tail - a.tail) * t;
+    if (a.type == ShapeType::Text) tweenText(a, b, t, s);
     s.strokeWidth = l(a.strokeWidth, b.strokeWidth);
     s.opacity = l(a.opacity, b.opacity);
     s.cornerRadius = l(a.cornerRadius, b.cornerRadius);
@@ -197,12 +226,24 @@ void propagate(Frame& f, const QHash<int, double>& seeds, bool elasticLag)
 QVector<int> updateStretch(Frame& f)
 {
     QVector<int> changed;
-    bool any = false;
-    for (const Shape& s : std::as_const(f.shapes))
-        if (s.hasLinks()) {
-            any = true;
-            break;
+    bool any = false, tails = false;
+    for (const Shape& s : std::as_const(f.shapes)) {
+        if (s.hasLinks()) any = true;
+        if (s.tailLink.target) tails = true;
+    }
+    if (tails) {  // glued speech-bubble tails follow their target (the bubble itself does not move)
+        QHash<int, int> ti;
+        for (int i = 0; i < f.shapes.size(); ++i) ti.insert(f.shapes.at(i).id, i);
+        for (int i = 0; i < f.shapes.size(); ++i) {
+            const Shape& cs = f.shapes.at(i);
+            if (!cs.tailLink.target || cs.w <= 0 || cs.h <= 0) continue;
+            const int k = ti.value(cs.tailLink.target, -1);
+            if (k < 0 || k == i) continue;
+            const QPointF l = cs.toLocal(anchorWorld(f.shapes.at(k), cs.tailLink.anchor));
+            const QPointF nt(l.x() / cs.w, l.y() / cs.h);
+            if (nt != cs.tail) f.shapes[i].tail = nt;
         }
+    }
     if (!any) return changed;
     QHash<int, int> idx;
     for (int i = 0; i < f.shapes.size(); ++i) idx.insert(f.shapes.at(i).id, i);
@@ -438,6 +479,7 @@ void removeJointsOf(Frame& f, const QSet<int>& ids)
     f.joints.removeIf([&](const Joint& j) { return ids.contains(j.parent) || ids.contains(j.child); });
     for (int i = 0; i < f.shapes.size(); ++i) {
         const Shape& cs = f.shapes.at(i);
+        if (ids.contains(cs.tailLink.target)) f.shapes[i].tailLink = EndLink();
         if (!cs.hasLinks()) continue;
         if (ids.contains(cs.ends[0].target) || ids.contains(cs.ends[1].target)) {
             Shape& s = f.shapes[i];

@@ -70,6 +70,7 @@ struct Shape {
     int bubble = 0;            // Text: 0 none, 1 speech, 2 thought, 3 shout, 4 box (caption)
     QPointF tail = QPointF(-0.25, 1.05);  // Text bubble: tail tip, local coords normalised by (w, h)
     QColor bubbleFill = Qt::white;
+    EndLink tailLink;          // Text bubble: tail tip glued to a point on another shape (optional)
     EndLink ends[2];           // Line/Arrow: start (-w/2) and end (+w/2)
 
     bool hasWarp() const;

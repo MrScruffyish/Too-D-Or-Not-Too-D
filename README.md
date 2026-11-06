@@ -33,7 +33,7 @@ To run the headless smoke test: `./build/tood --selftest /some/dir`
 | F | Freehand | Drag to draw; the stroke is simplified and smoothed. Ending near the start closes it. The tool stays active for more strokes. |
 | B Z | Polyline, Curve | Click points: straight segments, or a smooth curve through them. Double-click or Enter finishes; click the first point to close; Backspace removes the last point; Esc cancels. |
 | X | Text | Font, size, bold, italic and alignment are in Properties. |
-| G | Speech bubble | Click to place text in a bubble and type it. Drag the yellow handle to point the tail. Style (speech, thought, shout, box) and colours in Properties; any text can get a bubble there. |
+| G | Speech bubble | Click to place text in a bubble and type it. Drag the yellow handle to point the tail; drop it on a shape (with *Sticky ends* on, no Shift) to glue it, so it follows the speaker; drop it on empty space or hold Shift to keep it free. Style (speech, thought, shout, box) and colours in Properties; any text can get a bubble there. In tweens, changing text is typed in letter by letter and the bubble grows with it. |
 | O | Point | Helper point. Visible while editing, never exported. |
 | C | Connect | Click a point on shape A, then a point on shape B; B moves so the points meet. Click the same spot twice to join overlapping shapes. |
 | I | Pin | Click where shapes overlap to connect them at that exact point (nothing moves). "Pin joins" in the toolbar: the **top two** shapes, or **all** shapes under the spot (Ctrl+click = the other mode). Uses the "Connect as" type; the lower shape is the parent. Handy after drawing, e.g. a circle on top of a rectangle. |

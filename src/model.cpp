@@ -123,6 +123,7 @@ QJsonObject shapeToJson(const Shape& s)
             o["bubble"] = s.bubble;
             o["tail"] = QJsonArray{s.tail.x(), s.tail.y()};
             o["bfill"] = colorStr(s.bubbleFill);
+            if (s.tailLink.target) o["tailLink"] = linkToJson(s.tailLink);
         }
     }
     if (s.type == ShapeType::Image) o["img"] = s.imageKey;
@@ -181,6 +182,7 @@ Shape shapeFromJson(const QJsonObject& o)
     s.bubble = o.value("bubble").toInt(0);
     if (const QJsonArray ta = o.value("tail").toArray(); ta.size() == 2) s.tail = QPointF(ta[0].toDouble(), ta[1].toDouble());
     s.bubbleFill = colorFrom(o.value("bfill"), Qt::white);
+    s.tailLink = linkFromJson(o.value("tailLink"));
     s.group = o.value("grp").toInt(0);
     s.imageKey = o.value("img").toString();
     s.lockAspect = o.value("lock").toBool();
@@ -323,6 +325,7 @@ bool operator==(const Shape& a, const Shape& b)
            a.lineStyle == b.lineStyle && a.amplitude == b.amplitude && a.accent == b.accent &&
            a.closed == b.closed && a.curve == b.curve && a.pts == b.pts &&
            a.bubble == b.bubble && a.tail == b.tail && a.bubbleFill == b.bubbleFill &&
+           a.tailLink.target == b.tailLink.target && a.tailLink.anchor == b.tailLink.anchor &&
            a.name == b.name && a.text == b.text && a.fontFamily == b.fontFamily &&
            a.imageKey == b.imageKey;
 }
@@ -572,10 +575,13 @@ void fitTextShape(Shape& s)
                                       s.text.isEmpty() ? QStringLiteral(" ") : s.text);
     s.w = br.width() + 12;
     s.h = br.height() + 6;
-    if (s.bubble) {  // room for the bubble around the text (round shapes need more)
-        const double k = s.bubble == 4 ? 1.15 : s.bubble == 1 ? 1.35 : 1.55;
-        s.w = s.w * k + 16;
-        s.h = s.h * k + 14;
+    if (s.bubble) {  // room around the text: based on the text HEIGHT, so long texts don't get huge side margins
+        const double th = s.h;
+        switch (s.bubble) {
+        case 4: s.w += 16; s.h += 12; break;                          // box
+        case 1: s.w += th * 0.9 + 14; s.h = th * 1.3 + 12; break;    // speech (rounded ends)
+        default: s.w += th * 1.3 + 18; s.h = th * 1.6 + 16; break;   // thought / shout need more room
+        }
     }
 }
 
@@ -594,7 +600,12 @@ QPainterPath bubblePath(const Shape& s)
     const QPointF dir = tl > 1e-6 ? tip / tl : QPointF(0, 1), perp(-dir.y(), dir.x());
     auto triangleTail = [&](double baseW) {
         QPainterPath t;
-        const QPointF b = dir * m * 0.15;
+        // start just inside the edge facing the tip, so wide bubbles get a normal tail, not a long sliver
+        const double kx = std::abs(dir.x()) > 1e-9 ? (s.w / 2) / std::abs(dir.x()) : 1e9;
+        const double ky = std::abs(dir.y()) > 1e-9 ? (s.h / 2) / std::abs(dir.y()) : 1e9;
+        const double kEdge = qMin(kx, ky);
+        if (tl <= kEdge * 0.9) return t;  // tip inside the bubble: no tail
+        const QPointF b = dir * qMax(0.0, kEdge - m * 0.3);
         t.moveTo(b + perp * baseW);
         t.lineTo(tip);
         t.lineTo(b - perp * baseW);
@@ -811,7 +822,7 @@ void paintShapeLocal(QPainter* p, const Shape& s, const QImage* img)
             p->drawRect(r);
         }
         break;
-    case ShapeType::Text:
+    case ShapeType::Text: {
         if (s.bubble) {
             p->setPen(pen);
             p->setBrush(s.bubbleFill);
@@ -821,11 +832,14 @@ void paintShapeLocal(QPainter* p, const Shape& s, const QImage* img)
         p->setClipRect(r, Qt::IntersectClip);
         p->setFont(shapeFont(s));
         p->setPen(s.fill);
-        p->drawText(s.bubble ? r.adjusted(s.w * 0.1 + 4, s.h * 0.1 + 3, -s.w * 0.1 - 4, -s.h * 0.1 - 3) : r,
+        const double ix = s.bubble == 4 ? 7 : s.bubble == 1 ? s.h * 0.3 + 4 : s.h * 0.4 + 6;  // inset from the bubble edge
+        const double iy = s.bubble == 4 ? 5 : s.h * 0.12 + 3;
+        p->drawText(s.bubble ? r.adjusted(ix, iy, -ix, -iy) : r,
                     (s.align == 1 ? Qt::AlignLeft : s.align == 2 ? Qt::AlignRight : Qt::AlignHCenter) |
                            Qt::AlignVCenter | Qt::TextWordWrap, s.text);
         p->restore();
         break;
+    }
     case ShapeType::Line:
         p->setPen(pen);
         p->setBrush(Qt::NoBrush);

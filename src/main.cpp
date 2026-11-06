@@ -226,9 +226,26 @@ int main(int argc, char** argv)
                     "  --log-session[=FILE]  write every operation of this session to a log file\n"
                     "                        (default: %s/session-<date>.log)\n"
                     "  --selftest DIR        run the headless self-test, writing files to DIR\n"
+                    "  --render FILE DIR     render every frame of FILE (tweens expanded) as PNGs into DIR\n"
                     "  -h, --help            show this help\n\n"
                     "Crashes are always recorded (backtrace + last operations) in:\n  %s\n",
                     qPrintable(QFileInfo(OpLog::crashLogPath()).absolutePath()), qPrintable(OpLog::crashLogPath()));
+        return 0;
+    }
+    if (const int ri = args.indexOf("--render"); ri >= 0) {  // headless PNG sequence of the whole movie
+        Document d;
+        QString err;
+        if (!Document::load(args.value(ri + 1), d, &err)) {
+            std::fprintf(stderr, "%s\n", qPrintable(err));
+            return 1;
+        }
+        const QDir out(args.value(ri + 2, QStringLiteral(".")));
+        QDir().mkpath(out.absolutePath());
+        int n = 0;
+        for (int c = 0; c < d.chapters.size(); ++c)
+            for (const Frame& f : Solver::expandFrames(d.chapterFrames(c)))
+                renderFrameImage(d, f, 1.0, true, Qt::white).save(out.filePath(QStringLiteral("frame_%1.png").arg(++n, 4, 10, QChar('0'))));
+        std::printf("Rendered %d frames to %s\n", n, qPrintable(out.absolutePath()));
         return 0;
     }
     OpLog::installCrashHandler();

@@ -1448,7 +1448,7 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     });
     connect(m_amp, &QDoubleSpinBox::valueChanged, this, [this](double val) { editAll([val](Shape& s) { s.amplitude = val; }, tr("Spring width"), 24); });
     connect(detach, &QPushButton::clicked, this, [this] {
-        editAll([](Shape& s) { s.ends[0] = s.ends[1] = EndLink(); }, tr("Unglue line"), -1);
+        editAll([](Shape& s) { s.ends[0] = s.ends[1] = EndLink(); s.tailLink = EndLink(); }, tr("Unglue"), -1);
     });
     connect(m_text, &QLineEdit::editingFinished, this, [this] {
         const QString t = m_text->text();
@@ -1808,7 +1808,9 @@ void MainWindow::refreshProps()
         label(m_inner, t == ShapeType::Hourglass ? tr("Waist") : t == ShapeType::Eye ? tr("Iris size") : tr("Inner ratio"));
         row(m_lineStyle, lin);
         row(m_amp, lin && s->lineStyle == 1);
-        row(m_endsRow, lin);
+        row(m_endsRow, lin || (text && s->bubble));
+        if (text && s->bubble)
+            m_endsLabel->setText(tr("tail: %1").arg(s->tailLink.target ? shapeLabel(f.find(s->tailLink.target)) : tr("free")));
         if (lin) {
             auto endName = [&](const EndLink& l) { return l.target ? shapeLabel(f.find(l.target)) : tr("free"); };
             m_endsLabel->setText(tr("start: %1\nend: %2").arg(endName(s->ends[0]), endName(s->ends[1])));
@@ -2392,6 +2394,7 @@ void MainWindow::pasteShapes(const QVector<Shape>& shapes, const QVector<Joint>&
         if (anyNew && nudge) c.pos += QPointF(20, 20);
         for (EndLink& l : c.ends)
             if (l.target) l.target = remap.value(l.target, 0);  // unglue ends whose target was not copied
+        if (c.tailLink.target) c.tailLink.target = remap.value(c.tailLink.target, 0);
         if (c.group && anyNew) {
             if (!groupMap.contains(c.group)) groupMap.insert(c.group, m_doc.newId());
             c.group = groupMap.value(c.group);
