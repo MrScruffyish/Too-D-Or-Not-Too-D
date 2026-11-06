@@ -408,9 +408,14 @@ bool connectShapes(Frame& f, int a, QPointF pa, int b, QPointF pb, JointType typ
     const Shape* sa = std::as_const(f).find(a);
     const Shape* sb = std::as_const(f).find(b);
     if (!sa || !sb) return fail(QObject::tr("Shape not found."));
-    if (component(f, a).contains(b))
+    const QSet<int> compA = component(f, a);
+    if (compA.contains(b))
         return fail(QObject::tr("These shapes are already connected (directly or via others). "
                                 "Loops are not supported."));
+    const QSet<int> compB = component(f, b);
+    int rootB = b;  // top of b's assembly before connecting
+    for (int ji = f.parentJointIndex(rootB), guard = 0; ji >= 0 && guard < 100000; ji = f.parentJointIndex(rootB), ++guard)
+        rootB = f.joints.at(ji).parent;
     reroot(f, b);  // the child must not have another parent
     Joint j;
     j.id = jointId;
@@ -422,6 +427,9 @@ bool connectShapes(Frame& f, int a, QPointF pa, int b, QPointF pb, JointType typ
     j.restAngle = sb->rot - sa->rot;
     f.joints.append(j);
     enforce(f, b);  // snap the child's point onto the parent's point
+    // The larger assembly keeps its top (root): attaching a small part to a figure
+    // must not make the small part the parent of the whole figure.
+    if (compB.size() > compA.size()) reroot(f, rootB);
     return true;
 }
 

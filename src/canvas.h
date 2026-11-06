@@ -52,6 +52,7 @@ public:
     static const ToolInfo& toolInfo(int t);
 
     explicit Canvas(QWidget* parent = nullptr);
+    ~Canvas() override;
 
     void setDocument(Document* d);
     void setFrameIndex(int i);
@@ -160,6 +161,7 @@ private:
     void pinAt(QPointF sp, bool invertMode);
     void finishPath(QVector<QPointF> pts, bool closed, bool smooth);
     void updateHoverCursor(QPointF sp);
+    QString dragHint(int id) const;  // what dragging this shape will do (connections)
     void refreshHover();  // recompute the snap marker at the cursor (e.g. when Shift changes)
     void expandToGroups();
     void startSpring(const QString& editText, const QVector<int>& pinned);
@@ -198,6 +200,7 @@ private:
 
     // path tools: points clicked so far (polyline/curve) and the freehand stroke
     QVector<QPointF> m_pathPts, m_drawPts;
+    int m_hoverShape = 0;
 
     // construction tools (midpoint, perpendicular, parallel, measure)
     QVector<QPointF> m_steps;

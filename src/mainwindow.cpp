@@ -642,6 +642,19 @@ bool MainWindow::showStartDialog(bool startup)
     return true;
 }
 
+// Tear down the canvas and undo stack first, while every member (document, panels)
+// is still alive, and without letting their signals call back into this window.
+MainWindow::~MainWindow()
+{
+    m_thumbTimer.stop();
+    m_playTimer.stop();
+    m_undo->blockSignals(true);
+    m_canvas->blockSignals(true);
+    delete m_canvas;
+    m_canvas = nullptr;
+    OpLog::op(QStringLiteral("exit"));
+}
+
 QAction* MainWindow::act(const QString& text, const QKeySequence& ks, std::function<void()> fn, const QIcon& icon)
 {
     auto* a = new QAction(icon, text, this);
@@ -1269,6 +1282,39 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     m_form->addRow(tr("Path"), m_pathCurve);
     v->addWidget(m_shapeBox);
 
+    // connection structure of the selected shape
+    m_structBox = new QGroupBox(tr("Structure (how it is connected)"));
+    auto* sv = new QVBoxLayout(m_structBox);
+    m_tree = new QTreeWidget;
+    m_tree->setHeaderHidden(true);
+    m_tree->setMinimumHeight(140);
+    m_tree->setToolTip(tr("The top item (root) moves everything when dragged; children follow their connection type. Click to select."));
+    connect(m_tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it) {
+        const int id = it->data(0, Qt::UserRole).toInt();
+        if (id > 0) m_canvas->setSelectedIds({id});
+    });
+    auto* sb = new QHBoxLayout;
+    auto* makeRoot = new QPushButton(tr("Make this the root"));
+    makeRoot->setToolTip(tr("Turn the hierarchy around so the selected shape is at the top: dragging it then moves the whole assembly"));
+    connect(makeRoot, &QPushButton::clicked, this, [this] {
+        const QVector<int> ids = m_canvas->selectedIds();
+        if (ids.size() != 1 || !requireKeyframe()) return;
+        Solver::reroot(curFrame(), ids.first());
+        m_canvas->sync();
+        commit(tr("Make root"));
+        refreshProps();
+        log(tr("The selected shape is now the root: drag it to move the whole assembly."));
+    });
+    auto* selAll = new QPushButton(tr("Select whole assembly"));
+    selAll->setToolTip(tr("Select everything connected (Ctrl+L), then drag to move it all"));
+    connect(selAll, &QPushButton::clicked, this, [this] { selectConnected(); });
+    sb->addWidget(makeRoot);
+    sb->addWidget(selAll);
+    sv->addWidget(m_tree);
+    sv->addLayout(sb);
+    v->addWidget(m_structBox);
+    m_structBox->hide();
+
     m_jointBox = new QGroupBox(tr("Connection"));
     m_jForm = new QFormLayout(m_jointBox);
     m_jType = new QComboBox;
@@ -1679,6 +1725,7 @@ void MainWindow::refreshProps()
         m_tweenBox->layout()->setEnabled(true);
         if (auto* fl = qobject_cast<QFormLayout*>(m_tweenBox->layout())) fl->setRowVisible(m_twArc, cf.tweenPath == 1 || cf.tweenPath == 2);
         const bool ok = !Solver::tweenFrames(m_doc.frames, m_cur).isEmpty();
+        m_structBox->hide();
         m_twInfo->setText(ok ? tr("Live in-betweens from the keyframe before to the keyframe after. Edit those keyframes "
                                   "(or insert new ones) and this follows. Duration per frame: the Duration box below the canvas.")
                              : tr("⚠ Needs a keyframe both before and after it."));
@@ -1789,6 +1836,58 @@ void MainWindow::refreshProps()
                              .arg(rel, 0, 'f', 1));
     }
     m_updatingProps = false;
+    refreshStructure();
+}
+
+void MainWindow::refreshStructure()
+{
+    const Frame& f = m_doc.frames.at(m_cur);
+    const QVector<int> ids = m_canvas->selectedIds();
+    int focus = ids.size() == 1 ? ids.first() : -1;
+    if (ids.isEmpty()) {
+        const int ji = f.jointIndex(m_canvas->selectedJoint());
+        if (ji >= 0) focus = f.joints.at(ji).child;
+    }
+    const QSet<int> comp = focus > 0 && !f.isTween() ? Solver::assembly(f, {focus}) : QSet<int>();
+    if (comp.size() < 2) {
+        m_structBox->hide();
+        return;
+    }
+    m_structBox->show();
+    m_tree->clear();
+    QHash<int, QVector<int>> kids;  // parent id -> joint indices
+    for (int i = 0; i < f.joints.size(); ++i)
+        if (comp.contains(f.joints.at(i).parent)) kids[f.joints.at(i).parent] << i;
+    QSet<int> shown;
+    std::function<void(QTreeWidgetItem*, int, int)> add = [&](QTreeWidgetItem* parent, int id, int ji) {
+        if (shown.contains(id)) return;
+        shown.insert(id);
+        const Shape* s = f.find(id);
+        QString label = shapeLabel(s);
+        if (ji >= 0) label += QStringLiteral("  —  ") + jointTypeName(f.joints.at(ji).type);
+        else label += tr("  —  root: drag to move everything");
+        auto* it = parent ? new QTreeWidgetItem(parent, {label}) : new QTreeWidgetItem(m_tree, {label});
+        it->setData(0, Qt::UserRole, id);
+        if (id == focus) {
+            QFont fnt = it->font(0);
+            fnt.setBold(true);
+            it->setFont(0, fnt);
+            m_tree->setCurrentItem(it);
+        }
+        for (int k : kids.value(id)) add(it, f.joints.at(k).child, k);
+        for (const Shape& o : f.shapes)  // lines whose ends are glued to this shape
+            if (!shown.contains(o.id) && (o.ends[0].target == id || o.ends[1].target == id) && f.parentJointIndex(o.id) < 0 &&
+                !kids.contains(o.id)) {
+                shown.insert(o.id);
+                auto* g = new QTreeWidgetItem(it, {shapeLabel(&o) + tr("  —  glued line end")});
+                g->setData(0, Qt::UserRole, o.id);
+            }
+    };
+    for (const Shape& s : f.shapes)  // roots first (in drawing order)
+        if (comp.contains(s.id) && f.parentJointIndex(s.id) < 0 && (kids.contains(s.id) || !s.hasLinks())) add(nullptr, s.id, -1);
+    for (const Shape& s : f.shapes)  // anything left (e.g. lines glued between two assemblies)
+        if (comp.contains(s.id) && !shown.contains(s.id)) add(nullptr, s.id, -1);
+    m_tree->expandAll();
 }
 
 void MainWindow::updateTitle()

@@ -53,6 +53,10 @@ To run the headless smoke test: `./build/tood --selftest /some/dir`
 - **Elastic** (purple): works like a rubber band. The other shape lags behind while you drag and springs back when you let go. Stiffness is set in Properties.
 - **Stretchy lines:** with *Sticky ends* on, the ends of a line or arrow drawn on (or dropped onto) shapes are glued to them. The line then stretches and turns when those shapes move. Use the spring style for a coil.
 
+**Seeing connections:** with *Connections* on (Ctrl+J), every connection is drawn as a dotted line from the parent to the pin and an arrow from the pin to the child, in the connection's colour. Each assembly's root has a gold ★. The selected assembly is highlighted. Hovering a shape (Select tool) tells in the Info panel what dragging it will do.
+
+**Hierarchy:** connections form a tree. The top shape (the *root*) moves everything when dragged; a hinge child rotates around its pin instead. When you connect a small part to a larger assembly, the larger assembly keeps its root. Selecting a connected shape shows the **Structure** tree in Properties: it marks the root, shows each connection type, selects a shape when you click it, and has **Make this the root** (e.g. make the body the root of a figure) and **Select whole assembly** (then drag to move everything; same as Ctrl+L).
+
 Click a joint marker to select it. Drag the marker to move the pivot. In Properties you can change the type and limits, reverse the direction (which side stays put), or delete it. Loops are not allowed: every shape has at most one parent.
 
 ## Selecting, grouping, copying

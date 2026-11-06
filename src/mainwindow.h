@@ -31,6 +31,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow();
+    ~MainWindow() override;
     void applySnapshot(const Document& d, int frame);  // used by undo commands
     bool openPath(const QString& path);
     // "Create new with size …" / "Open …". Returns false if cancelled.
@@ -102,6 +103,7 @@ private:
     void groupSel();
     void ungroupSel();
     void selectConnected();
+    void refreshStructure();  // connection tree of the selected shape (Properties)
     void editText(int id);
     void editSingle(const std::function<void(Frame&, int, Shape&)>& fn, const QString& text, int field);
     void editAll(const std::function<void(Shape&)>& fn, const QString& text, int field);
@@ -179,6 +181,8 @@ private:
     QLineEdit* m_text = nullptr;
     QFontComboBox* m_font = nullptr;
     QGroupBox* m_jointBox = nullptr;
+    QGroupBox* m_structBox = nullptr;
+    class QTreeWidget* m_tree = nullptr;
     QGroupBox* m_tweenBox = nullptr;
     QSpinBox *m_twCount = nullptr, *m_twSquash = nullptr;
     QComboBox *m_twEase = nullptr, *m_twPath = nullptr;

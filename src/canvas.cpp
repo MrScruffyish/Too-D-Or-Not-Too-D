@@ -246,6 +246,19 @@ Canvas::Canvas(QWidget* parent) : QGraphicsView(parent), m_scene(new QGraphicsSc
     connect(&m_springTimer, &QTimer::timeout, this, &Canvas::springTick);
 }
 
+// Delete the scene while the canvas is still intact and silent: removing items
+// clears the selection, and those notifications must not reach anyone during teardown.
+Canvas::~Canvas()
+{
+    m_springTimer.stop();
+    blockSignals(true);
+    m_scene->blockSignals(true);
+    m_scene->disconnect(this);
+    m_items.clear();
+    delete m_scene;
+    m_scene = nullptr;
+}
+
 void Canvas::setDocument(Document* d)
 {
     m_doc = d;
@@ -616,9 +629,47 @@ int Canvas::hitJoint(QPointF sp) const
     return -1;
 }
 
+QString Canvas::dragHint(int id) const
+{
+    const Frame& f = cframe();
+    const ::Shape* s = f.find(id);
+    if (!s) return {};
+    auto name = [&f](int sid) {
+        const ::Shape* x = f.find(sid);
+        if (!x) return QStringLiteral("?");
+        return x->name.isEmpty() ? QStringLiteral("%1 #%2").arg(shapeTypeName(x->type)).arg(sid) : x->name;
+    };
+    const int n = Solver::component(f, id).size();
+    if (n < 2) return tr("%1: not connected. Drag to move it.").arg(name(id));
+    const Solver::DragInfo di = Solver::dragInfo(f, id);
+    if (di.joint < 0)
+        return di.root == id ? tr("%1 is the ROOT (★) of an assembly of %2 shapes: dragging it moves everything.").arg(name(id)).arg(n)
+                             : tr("%1 is welded to the root %2: dragging moves the whole assembly (%3 shapes).").arg(name(id), name(di.root)).arg(n);
+    const Joint& j = f.joints.at(di.joint);
+    const QString who = di.root == id ? name(id) : tr("%1 (welded to %2)").arg(name(id), name(di.root));
+    switch (j.type) {
+    case JointType::Hinge:
+        return tr("%1 hangs on a hinge from %2: dragging ROTATES it around the pin. To move everything drag the root (★), "
+                  "or press Ctrl+L first.").arg(who, name(j.parent));
+    case JointType::Free:
+        return tr("%1 has a free pin to %2: dragging moves it, and %2 swings along.").arg(who, name(j.parent));
+    case JointType::Elastic:
+        return tr("%1 is elastic to %2: dragging stretches the band, it springs back when released.").arg(who, name(j.parent));
+    default: return {};
+    }
+}
+
 void Canvas::updateHoverCursor(QPointF sp)
 {
     if (m_spaceDown) return;
+    if (m_tool == ToolSelect && !m_readOnly) {  // tell what a drag would do
+        const ShapeItem* it = topItemAt(sp);
+        const int id = it ? it->id() : 0;
+        if (id != m_hoverShape) {
+            m_hoverShape = id;
+            emit prompt(id ? dragHint(id) : promptText());
+        }
+    }
     const bool sel = m_tool == ToolSelect || m_tool == ToolWarp;
     Qt::CursorShape c = sel ? Qt::ArrowCursor : Qt::CrossCursor;
     if (sel && !m_readOnly) {
@@ -1661,6 +1712,77 @@ void Canvas::drawForeground(QPainter* p, const QRectF& rect)
         p->drawPolyline(QPolygonF(m_drawPts));
     }
 
+    QVector<QPair<QPointF, bool>> rootStars;  // drawn last so pin markers never cover them
+    bool anyHot = false;
+    if (showJoints && !cframe().joints.isEmpty()) {
+        // connection lines: parent ··· pin → child (arrow), stronger for the selected assembly; ★ on roots
+        QSet<int> hot;
+        if (!ids.isEmpty()) hot = Solver::assembly(cframe(), QSet<int>(ids.cbegin(), ids.cend()));
+        else if (m_selJoint >= 0)
+            if (const int ji = cframe().jointIndex(m_selJoint); ji >= 0) hot = Solver::assembly(cframe(), {cframe().joints.at(ji).child});
+        anyHot = !hot.isEmpty();
+        QSet<int> parents, children;
+        for (const Joint& j : cframe().joints) {
+            const ShapeItem* pi = m_items.value(j.parent);
+            const ShapeItem* ci = m_items.value(j.child);
+            if (!pi || !ci) continue;
+            parents << j.parent;
+            children << j.child;
+            const bool h = hot.contains(j.child);
+            QColor c = jointColor(j.type);
+            c.setAlpha(h ? 220 : (hot.isEmpty() ? 110 : 45));
+            const QPointF w = Solver::anchorWorld(pi->shapeData(), j.anchorP);
+            const QPointF pc = pi->shapeData().pos, cc = ci->shapeData().pos;
+            p->setBrush(Qt::NoBrush);
+            p->setPen(cosmetic(c, h ? 2 : 1, Qt::DotLine));
+            p->drawLine(pc, w);
+            p->setPen(cosmetic(c, h ? 2 : 1));
+            p->drawLine(w, cc);
+            const QPointF d = cc - w;
+            const double l = std::hypot(d.x(), d.y());
+            if (l > 12 / sc) {  // arrowhead at the child
+                const QPointF u = d / l, nrm(-u.y(), u.x());
+                const double a = (h ? 9 : 7) / sc;
+                p->setPen(Qt::NoPen);
+                p->setBrush(c);
+                p->drawPolygon(QPolygonF() << cc << cc - u * a + nrm * a * 0.5 << cc - u * a - nrm * a * 0.5);
+            }
+        }
+        for (int rid : std::as_const(parents)) {
+            if (children.contains(rid)) continue;
+            const ShapeItem* ri = m_items.value(rid);
+            if (!ri) continue;
+            rootStars.append({ri->shapeData().pos + QPointF(-11 / sc, -11 / sc), hot.contains(rid)});
+        }
+    }
+    auto drawStars = [&] {
+        for (const auto& rs : std::as_const(rootStars)) {
+            const QPointF c = rs.first;
+            const bool h = rs.second;
+            const double R = (h ? 9 : 7) / sc;
+            QPolygonF star;
+            for (int k = 0; k < 10; ++k) {
+                const double a = -M_PI / 2 + M_PI * k / 5;
+                const double r = (k & 1) ? R * 0.45 : R;
+                star << c + QPointF(std::cos(a) * r, std::sin(a) * r);
+            }
+            p->setPen(cosmetic(QColor(90, 60, 0), 1));
+            p->setBrush(QColor(255, 200, 0, h || !anyHot ? 240 : 120));
+            p->drawPolygon(star);
+            if (h) {
+                const QPoint vp = mapFromScene(c) + QPoint(11, -9);
+                p->save();
+                p->resetTransform();
+                p->setPen(QColor(120, 80, 0));
+                QFont fnt = p->font();
+                fnt.setBold(true);
+                p->setFont(fnt);
+                p->drawText(vp, tr("root"));
+                p->restore();
+            }
+        }
+    };
+
     if (showJoints) {
         // glued connector ends
         p->setPen(cosmetic(Qt::white, 1));
@@ -1722,6 +1844,8 @@ void Canvas::drawForeground(QPainter* p, const QRectF& rect)
             }
         }
     }
+
+    drawStars();
 
     // construction previews
     const QPen guide = cosmetic(QColor(230, 0, 140), 1.5, Qt::DashLine);
