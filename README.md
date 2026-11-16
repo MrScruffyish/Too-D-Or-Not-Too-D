@@ -12,6 +12,11 @@ cmake --build build
 ./build/tood [project.tood]
 ```
 
+The `Makefile` wraps the same configure and build steps: `make` (or `make all`)
+creates `build/tood`, `make run` starts it, `make selftest` runs the headless
+smoke test in `/tmp/tood-selftest`, and `make clean` removes the build
+directory.
+
 On startup a dialog lets you create a new project (preset or custom size, background, FPS) or open an existing or recent one. Passing a `.tood` file on the command line skips the dialog.
 
 To run the headless smoke test: `./build/tood --selftest /some/dir`
