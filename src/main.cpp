@@ -155,24 +155,47 @@ static int selfTest2(const QString& dir)
     f.shapes.last().strokeWidth = 1;
     add(ShapeType::Eye, {600, 300}, 140, 70, Qt::white);
     f.shapes.last().innerRatio = 0.6;
-    add(ShapeType::Rect, {720, 300}, 90, 60, QColor(30, 160, 160));
+    const int warpedId = add(ShapeType::Rect, {720, 300}, 90, 60, QColor(30, 160, 160));
     f.shapes.last().warp[1] = {0.4, -0.3};
     f.shapes.last().warp[2] = {0.2, 0.2};
     add(ShapeType::Ellipse, {420, 470}, 60, 60, QColor(240, 120, 170));
     f.shapes.last().squash = 1.8;
     f.shapes.last().squashAngle = 30;
-    const QPointF warped = f.shapes.at(f.shapes.size() - 2).toWorld({45, -30});
-    const QPointF back = f.shapes.at(f.shapes.size() - 2).toLocal(warped);
+    const QPointF warped = f.find(warpedId)->toWorld({45, -30});
+    const QPointF back = f.find(warpedId)->toLocal(warped);
     std::printf("warp round-trip error %.2e\n", QLineF(back, QPointF(45, -30)).length());
+
+    // Every effect preset renders and survives a save/load round trip.
+    for (int p = 0; p < 7; ++p) {
+        add(ShapeType::Effect, QPointF(75 + 105 * p, 545), 90, 90, QColor(255, 140, 30));
+        Shape& fx = f.shapes.last();
+        fx.effectPreset = p;
+        fx.effectTime = 0.35 + 0.05 * p;
+        fx.effectSeed = 1234 + p;
+        fx.effectDensity = 1.25;
+        fx.sides = 32;
+        fx.accent = QColor(255, 230, 120);
+    }
+    const int fxId = f.shapes.last().id;
+    Frame fxA = f, fxB = f;
+    fxA.find(fxId)->effectTime = 0;
+    fxB.find(fxId)->effectTime = 1;
+    const QVector<Frame> fxMid = Solver::makeTweens(fxA, fxB, 1, 0, 0, 100, 0, 0, nullptr, nullptr);
+    const Shape* midFx = fxMid.isEmpty() ? nullptr : fxMid.first().find(fxId);
+    std::printf("effect tween: mid time %.3f\n", midFx ? midFx->effectTime : -1.0);
 
     Document back2;
     QString err;
     d.save(QDir(dir).filePath("selftest2.tood"), &err);
     Document::load(QDir(dir).filePath("selftest2.tood"), back2, &err);
     const Frame& g = back2.frames.at(0);
-    std::printf("roundtrip: shapes %d, warp kept=%d, links kept=%d, type kept=%d\n", int(g.shapes.size()),
-                g.shapes.at(g.shapes.size() - 2).hasWarp(), g.find(sp.id)->hasLinks(),
-                g.shapes.at(5).type == ShapeType::Hourglass);
+    const Shape* loadedFx = g.find(fxId);
+    std::printf("roundtrip: shapes %d, warp kept=%d, links kept=%d, type kept=%d, fx kept=%d\n", int(g.shapes.size()),
+                g.find(warpedId)->hasWarp(), g.find(sp.id)->hasLinks(),
+                g.shapes.at(5).type == ShapeType::Hourglass,
+                loadedFx && loadedFx->type == ShapeType::Effect && loadedFx->effectPreset == 6 &&
+                        qAbs(loadedFx->effectTime - 0.65) < 1e-6 && loadedFx->effectSeed == 1240 &&
+                        qAbs(loadedFx->effectDensity - 1.25) < 1e-6);
     renderFrameImage(d, f, 1, true).save(QDir(dir).filePath("selftest2.png"));
 
     // chapters: two chapters survive a save/load round trip, the active one is restored

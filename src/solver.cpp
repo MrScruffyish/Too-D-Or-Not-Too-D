@@ -190,6 +190,8 @@ Shape lerpShape(const Shape& a, const Shape& b, double t)
     s.fontSize = l(a.fontSize, b.fontSize);
     s.sides = qRound(l(a.sides, b.sides));
     s.amplitude = l(a.amplitude, b.amplitude);
+    s.effectTime = l(a.effectTime, b.effectTime);
+    s.effectDensity = l(a.effectDensity, b.effectDensity);
     s.squash = l(a.squash, b.squash);
     s.squashAngle = (a.squash == 1.0) ? b.squashAngle : (b.squash == 1.0) ? a.squashAngle : l(a.squashAngle, b.squashAngle);
     for (int k = 0; k < 4; ++k) s.warp[k] = a.warp[k] + (b.warp[k] - a.warp[k]) * t;
@@ -558,7 +560,8 @@ Frame tween(const Frame& A, const Frame& B, double t, const TweenOptions& opt)
         }
         if (k < 0) {
             s.opacity *= (1 - t);  // disappearing: fade out
-        } else if (opt.squash > 0 && !jointed.contains(s.id) && !s.isLinear() && !s.hasLinks()) {
+        } else if (opt.squash > 0 && !jointed.contains(s.id) && !s.isLinear() && !s.hasLinks() &&
+                   s.type != ShapeType::Effect) {
             // motion stretch: elongate along the direction of travel, area preserved
             const QPointF d = B.shapes.at(k).pos - sa.pos;
             const double speed = len(d) * opt.motionStep;  // px per frame

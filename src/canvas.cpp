@@ -45,6 +45,9 @@ const Canvas::ToolInfo kTools[] = {
     {"Text", "X", "Text: click to place, then type. Font, size, bold, italic and alignment are in Properties."},
     {"Speech bubble", "G", "Speech bubble: click to place a text in a bubble, then type it. Drag the yellow handle to point the tail at "
                            "the speaker. Style (speech, thought, shout, box) and colours in Properties."},
+    {"Effect", "K", "Effect (Kaboom): click or drag to place a particle effect. Choose Explosion, Fire, Smoke, Shockwave, "
+                    "Confetti or Magic sparkles in Properties. 'Animate' builds the keyframes and tween for you; "
+                    "'Time' can also be tweened by hand."},
     {"Point", "O", "Point: click to place a helper point (snaps to shape points). Helper points show while editing but are never exported."},
     {"Connect", "C", "Connect: click a point on the first shape, then a point on the second shape; the second shape moves so the "
                      "two points meet. Corners, midpoints, centres and edges snap (markers show them). "
@@ -111,6 +114,7 @@ ShapeType toolShape(Canvas::Tool t)
     case Canvas::ToolLine: return ShapeType::Line;
     case Canvas::ToolArrow: return ShapeType::Arrow;
     case Canvas::ToolText: return ShapeType::Text;
+    case Canvas::ToolEffect: return ShapeType::Effect;
     case Canvas::ToolPoint: return ShapeType::Point;
     default: return ShapeType::Rect;
     }
@@ -888,6 +892,17 @@ void Canvas::mousePressEvent(QMouseEvent* e)
         s.fill = Qt::white;
     }
     if (s.type == ShapeType::Diamond) s.sides = 8;
+    if (s.type == ShapeType::Effect) {
+        s.effectPreset = 0;
+        s.effectTime = 0;
+        s.effectSeed = (s.id * 2654435761u) % 100000;
+        s.effectDensity = 1;
+        s.sides = 40;
+        s.innerRatio = 0.35;
+        s.fill = QColor(255, 138, 30);
+        s.accent = QColor(255, 224, 122);
+        s.strokeWidth = 0;
+    }
     m_createLinkTarget = 0;
     if (s.isLinear()) {
         int tid = 0;
@@ -1249,6 +1264,7 @@ void Canvas::mouseReleaseEvent(QMouseEvent* e)
         if (!m_moved) {
             s->rot = 0;
             if (s->isLinear()) s->w = 120;
+            else if (s->type == ShapeType::Effect) s->w = s->h = 200;
             else s->w = s->h = 100;
         } else if (s->isLinear() && stickyEnds) {
             if (m_createLinkTarget) glueEnd(*s, 0, s->toWorld(QPointF(-s->w / 2, 0)));

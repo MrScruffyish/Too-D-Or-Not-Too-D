@@ -1,5 +1,7 @@
 #include "model.h"
 
+#include "effects.h"
+
 #include <QBuffer>
 #include <QFile>
 #include <QFontMetricsF>
@@ -65,7 +67,7 @@ bool gzipDecompress(const QByteArray& in, QByteArray& out, QString* err)
     return true;
 }
 const char* const kShapeKeys[] = {"rect", "ellipse", "triangle", "polygon", "star",  "line",  "arrow",
-                                  "text", "image",   "hourglass", "diamond", "eye", "point", "path"};
+                                  "text", "image",   "hourglass", "diamond", "eye", "point", "path", "effect"};
 const char* const kJointKeys[] = {"hinge", "free", "weld", "elastic"};
 
 QJsonObject linkToJson(const EndLink& l)
@@ -151,6 +153,12 @@ QJsonObject shapeToJson(const Shape& s)
         o["closed"] = s.closed;
         o["curve"] = s.curve;
     }
+    if (s.type == ShapeType::Effect) {
+        o["fx"] = s.effectPreset;
+        o["fxt"] = s.effectTime;
+        o["fxs"] = s.effectSeed;
+        o["fxd"] = s.effectDensity;
+    }
     return o;
 }
 
@@ -200,6 +208,10 @@ Shape shapeFromJson(const QJsonObject& o)
     s.curve = o.value("curve").toInt(0);
     s.ends[0] = linkFromJson(o.value("endA"));
     s.ends[1] = linkFromJson(o.value("endB"));
+    s.effectPreset = o.value("fx").toInt(0);
+    s.effectTime = o.value("fxt").toDouble(0);
+    s.effectSeed = o.value("fxs").toInt(1);
+    s.effectDensity = qBound(0.1, o.value("fxd").toDouble(1), 3.0);
     return s;
 }
 
@@ -549,7 +561,7 @@ QByteArray encodeImage(const QImage& img)
 QString shapeTypeName(ShapeType t)
 {
     static const char* n[] = {"Rectangle", "Ellipse", "Triangle", "Polygon", "Star",  "Line", "Arrow",
-                              "Text",      "Image",   "Hourglass", "Diamond", "Eye",  "Point", "Path"};
+                              "Text",      "Image",   "Hourglass", "Diamond", "Eye",  "Point", "Path", "Effect"};
     return QString::fromLatin1(n[int(t)]);
 }
 
@@ -884,6 +896,9 @@ void paintShapeLocal(QPainter* p, const Shape& s, const QImage* img)
         p->setPen(pen);
         p->setBrush(s.closed ? brush : QBrush(Qt::NoBrush));
         p->drawPath(shapePath(s));
+        break;
+    case ShapeType::Effect:
+        paintEffect(p, s);
         break;
     default:
         p->setPen(pen);

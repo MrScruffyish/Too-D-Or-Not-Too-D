@@ -12,6 +12,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QTransform>
 #include <QVector>
 
@@ -20,8 +21,8 @@ class QPainter;
 // Point = construction/helper point: visible while editing, never exported.
 // Path = arbitrary polyline / smooth curve (freehand, polyline and curve tools).
 enum class ShapeType { Rect, Ellipse, Triangle, Polygon, Star, Line, Arrow, Text, Image,
-                       Hourglass, Diamond, Eye, Point, Path };
-constexpr int kShapeTypeCount = 14;
+                       Hourglass, Diamond, Eye, Point, Path, Effect };
+constexpr int kShapeTypeCount = 15;
 
 // Hinge:   child can only rotate around the pin; dragging the parent carries the child.
 // Free:    pin stays connected, both sides move freely and the other side swings to trail.
@@ -72,6 +73,12 @@ struct Shape {
     QColor bubbleFill = Qt::white;
     EndLink tailLink;          // Text bubble: tail tip glued to a point on another shape (optional)
     EndLink ends[2];           // Line/Arrow: start (-w/2) and end (+w/2)
+    // Effect: procedural particles. The look is a pure function of these fields
+    // and effectTime, so renders are identical everywhere and fully tweenable.
+    int effectPreset = 0;      // see effects.h
+    double effectTime = 0;     // 0..1 playhead (wraps for looping effects)
+    int effectSeed = 1;        // deterministic variation
+    double effectDensity = 1;  // particle-count multiplier (0.1 .. 3)
 
     bool hasWarp() const;
     bool deformed() const { return squash != 1.0 || hasWarp(); }

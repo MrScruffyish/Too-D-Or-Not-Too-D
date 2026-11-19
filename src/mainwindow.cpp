@@ -1,12 +1,15 @@
 #include "mainwindow.h"
 
 #include "canvas.h"
+#include "effects.h"
 #include "gifwriter.h"
 #include "solver.h"
 #include "oplog.h"
 
 #include <QtWidgets>
 #include <QCryptographicHash>
+#include <QRandomGenerator>
+#include <cmath>
 #include <QSvgGenerator>
 #include <QUndoStack>
 #include <utility>
@@ -177,6 +180,20 @@ private:
     bool m_first = true;
 };
 
+// Sensible colours when a preset is chosen (or "Surprise me" is pressed).
+static void effectDefaults(int preset, QColor& fill, QColor& accent)
+{
+    static const QColor fills[] = {QColor(255, 138, 30),  QColor(255, 90, 0),   QColor(185, 190, 200),
+                                   QColor(79, 195, 255), QColor(255, 94, 138), QColor(155, 123, 255),
+                                   QColor(255, 170, 40)};
+    static const QColor accents[] = {QColor(255, 224, 122), QColor(255, 216, 61), QColor(232, 234, 238),
+                                     QColor(255, 255, 255), QColor(255, 213, 79), QColor(255, 243, 160),
+                                     QColor(255, 250, 210)};
+    const int i = qBound(0, preset, int(sizeof(fills) / sizeof(fills[0])) - 1);
+    fill = fills[i];
+    accent = accents[i];
+}
+
 QIcon toolIcon(int kind)
 {
     QPixmap pm(32, 32);
@@ -277,6 +294,27 @@ QIcon toolIcon(int kind)
         p.setPen(QPen(ink, 1.6));
         for (int i = -1; i <= 1; ++i) p.drawPoint(QPointF(i * 5, 0));
         p.restore();
+        break;
+    }
+    case Canvas::ToolEffect: {
+        p.setBrush(QColor(255, 150, 30));
+        p.setPen(Qt::NoPen);
+        QPolygonF burst;
+        for (int i = 0; i < 16; ++i) {
+            const double a = M_PI * i / 8;
+            const double r = (i & 1) ? 7 : 13;
+            burst << QPointF(16 + std::cos(a) * r, 16 + std::sin(a) * r);
+        }
+        p.drawPolygon(burst);
+        p.setBrush(QColor(255, 235, 130));
+        p.drawEllipse(QPointF(16, 16), 5, 5);
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(Qt::NoBrush);
+        for (int i = 0; i < 6; ++i) {
+            const double a = M_PI * i / 3 + 0.2;
+            p.drawLine(QPointF(16 + std::cos(a) * 11, 16 + std::sin(a) * 11),
+                       QPointF(16 + std::cos(a) * 14, 16 + std::sin(a) * 14));
+        }
         break;
     }
     case Canvas::ToolText: {
@@ -1376,6 +1414,74 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     connect(m_twPath, &QComboBox::currentIndexChanged, this, [this](int p) { editTween([p](Frame& f) { f.tweenPath = p; }, tr("Tween path"), 44); });
     connect(m_twArc, &QSpinBox::valueChanged, this, [this](int a) { editTween([a](Frame& f) { f.tweenArc = a; }, tr("Tween arc"), 45); });
     connect(bake, &QPushButton::clicked, this, [this] { tweenBake(); });
+
+    // ---------------- procedural effects
+    m_fxBox = new QGroupBox(tr("Effect (particles)"));
+    auto* fx = new QFormLayout(m_fxBox);
+    m_fxPreset = new QComboBox;
+    m_fxPreset->addItems(effectNames());
+    m_fxTime = dspin(0, 100, 5, 0, QStringLiteral(" %"));
+    m_fxTime->setToolTip(tr("Where the effect is in its cycle. Tween this from 0 to 100% to play it. "
+                            "Fire, Smoke and Sparkles loop; the others run once."));
+    m_fxParticles = new QSpinBox;
+    m_fxParticles->setRange(4, 600);
+    m_fxParticles->setKeyboardTracking(false);
+    m_fxDensity = new QSpinBox;
+    m_fxDensity->setRange(10, 300);
+    m_fxDensity->setSingleStep(10);
+    m_fxDensity->setSuffix(QStringLiteral(" %"));
+    m_fxDensity->setKeyboardTracking(false);
+    m_fxDensity->setToolTip(tr("Scales the particle count without changing the 'Particles' base value."));
+    m_fxSeed = new QSpinBox;
+    m_fxSeed->setRange(0, 999999);
+    m_fxSeed->setKeyboardTracking(false);
+    m_fxSeed->setToolTip(tr("Changes the random-but-repeatable arrangement of the particles."));
+    m_fxFrames = new QSpinBox;
+    m_fxFrames->setRange(2, 240);
+    m_fxFrames->setValue(12);
+    m_fxFrames->setToolTip(tr("Length of the animation created by Animate (in frames)."));
+    fx->addRow(tr("Effect"), m_fxPreset);
+    fx->addRow(tr("Time"), m_fxTime);
+    fx->addRow(tr("Particles"), m_fxParticles);
+    fx->addRow(tr("Density"), m_fxDensity);
+    fx->addRow(tr("Seed"), m_fxSeed);
+    fx->addRow(tr("Animate length"), m_fxFrames);
+    auto* fxButtons = new QHBoxLayout;
+    auto* animateFx = new QPushButton(tr("▶ Animate"));
+    animateFx->setToolTip(tr("Insert two keyframes (Time 0% → 100%) with a live tween between them, "
+                             "so the effect plays over the chosen number of frames."));
+    auto* surpriseFx = new QPushButton(tr("Surprise me"));
+    surpriseFx->setToolTip(tr("Pick a random preset, palette and seed for the selected effects."));
+    fxButtons->addWidget(animateFx);
+    fxButtons->addWidget(surpriseFx);
+    fx->addRow(fxButtons);
+    v->addWidget(m_fxBox);
+    m_fxBox->hide();
+
+    connect(m_fxPreset, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (m_updatingProps) return;
+        editAll([i](Shape& s) {
+            if (s.type != ShapeType::Effect) return;
+            s.effectPreset = i;
+            s.effectTime = 0;
+            effectDefaults(i, s.fill, s.accent);
+        }, tr("Effect preset"), 46);
+    });
+    connect(m_fxTime, &QDoubleSpinBox::valueChanged, this, [this](double val) {
+        editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.effectTime = val / 100.0; }, tr("Effect time"), 47);
+    });
+    connect(m_fxParticles, &QSpinBox::valueChanged, this, [this](int val) {
+        editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.sides = val; }, tr("Effect particles"), 48);
+    });
+    connect(m_fxDensity, &QSpinBox::valueChanged, this, [this](int val) {
+        editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.effectDensity = val / 100.0; }, tr("Effect density"), 49);
+    });
+    connect(m_fxSeed, &QSpinBox::valueChanged, this, [this](int val) {
+        editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.effectSeed = val; }, tr("Effect seed"), 50);
+    });
+    connect(animateFx, &QPushButton::clicked, this, [this] { animateEffect(); });
+    connect(surpriseFx, &QPushButton::clicked, this, [this] { surpriseEffect(); });
+
     v->addStretch();
 
     // ---- edits
@@ -1716,6 +1822,7 @@ void MainWindow::refreshProps()
     if (cf.isTween()) {
         m_shapeBox->setVisible(false);
         m_jointBox->setVisible(false);
+        m_fxBox->hide();
         m_hint->setVisible(false);
         m_twCount->setValue(cf.tweenCount);
         m_twEase->setCurrentIndex(cf.tweenEase);
@@ -1733,6 +1840,7 @@ void MainWindow::refreshProps()
         return;
     }
     m_shapeBox->setVisible(s);
+    m_fxBox->setVisible(s && s->type == ShapeType::Effect);
     m_jointBox->setVisible(!s && ji >= 0);
     m_hint->setVisible(!s && ji < 0);
     if (s) {
@@ -1772,6 +1880,16 @@ void MainWindow::refreshProps()
         m_bubble->setCurrentIndex(s->bubble);
         m_bubbleFill->setColor(s->bubbleFill);
         m_pathCurve->setCurrentIndex(s->curve);
+        if (s->type == ShapeType::Effect) {
+            m_fxPreset->setCurrentIndex(qBound(0, s->effectPreset, effectCount() - 1));
+            m_fxTime->setValue(s->effectTime * 100);
+            m_fxParticles->setValue(s->sides);
+            m_fxDensity->setValue(qRound(s->effectDensity * 100));
+            m_fxSeed->setValue(s->effectSeed);
+            if (auto* fl = qobject_cast<QFormLayout*>(m_fxBox->layout()))
+                if (QLabel* lab = qobject_cast<QLabel*>(fl->labelForField(m_fxTime)))
+                    lab->setText(effectLoops(s->effectPreset) ? tr("Phase") : tr("Time"));
+        }
 
         const ShapeType t = s->type;
         const bool text = t == ShapeType::Text, img = t == ShapeType::Image, lin = s->isLinear();
@@ -1786,26 +1904,31 @@ void MainWindow::refreshProps()
         row(m_ry, ell);
         row(m_lock, !lin && !pt);
         m_lock->setText(ell ? tr("Circle (radius X = Y)") : tr("Lock aspect"));
-        row(m_sq, !lin && !pt);
-        row(m_sqa, !lin && !pt);
-        row(m_resetWarp, s->hasWarp());
+        const bool fx = t == ShapeType::Effect;
+        row(m_sq, !lin && !pt && !fx);
+        row(m_sqa, !lin && !pt && !fx);
+        row(m_resetWarp, s->hasWarp() && !fx);
         row(m_fill, !lin && !img && !pt && !(t == ShapeType::Path && !s->closed));
         row(m_pathClosed, t == ShapeType::Path);
         row(m_pathCurve, t == ShapeType::Path);
         if (t == ShapeType::Path && single) m_typeLabel->setText(tr("Path #%1 (%2 points)").arg(s->id).arg(s->pts.size()));
-        label(m_fill, text ? tr("Colour") : tr("Fill"));
-        row(m_stroke, (!text || s->bubble) && !pt);
+        label(m_fill, text ? tr("Colour") : fx ? tr("Main colour") : tr("Fill"));
+        row(m_stroke, (!text || s->bubble) && !pt && !fx);
         row(m_bubble, text);
         row(m_bubbleFill, text && s->bubble);
-        row(m_accent, t == ShapeType::Eye);
-        row(m_sw, (!text || s->bubble) && !pt);
+        row(m_accent, t == ShapeType::Eye || fx);
+        label(m_accent, fx ? tr("Highlight") : tr("Pupil"));
+        row(m_sw, (!text || s->bubble) && !pt && !fx);
         row(m_op, !pt);
         row(m_cr, t == ShapeType::Rect);
-        const bool hasSides = t == ShapeType::Polygon || t == ShapeType::Star || t == ShapeType::Diamond || (lin && s->lineStyle == 1);
+        const bool hasSides = t == ShapeType::Polygon || t == ShapeType::Star || t == ShapeType::Diamond ||
+                              (lin && s->lineStyle == 1) || fx;
         row(m_sides, hasSides);
-        label(m_sides, lin ? tr("Coils") : t == ShapeType::Star ? tr("Points") : t == ShapeType::Diamond ? tr("Corners") : tr("Sides"));
-        row(m_inner, t == ShapeType::Star || t == ShapeType::Hourglass || t == ShapeType::Eye);
-        label(m_inner, t == ShapeType::Hourglass ? tr("Waist") : t == ShapeType::Eye ? tr("Iris size") : tr("Inner ratio"));
+        label(m_sides, fx ? tr("Particle count") : lin ? tr("Coils") : t == ShapeType::Star ? tr("Points")
+                                                      : t == ShapeType::Diamond ? tr("Corners") : tr("Sides"));
+        row(m_inner, t == ShapeType::Star || t == ShapeType::Hourglass || t == ShapeType::Eye || fx);
+        label(m_inner, fx ? tr("Spread") : t == ShapeType::Hourglass ? tr("Waist")
+                          : t == ShapeType::Eye ? tr("Iris size") : tr("Inner ratio"));
         row(m_lineStyle, lin);
         row(m_amp, lin && s->lineStyle == 1);
         row(m_endsRow, lin || (text && s->bubble));
@@ -2843,6 +2966,74 @@ void MainWindow::editTween(const std::function<void(Frame&)>& fn, const QString&
     fn(m_doc.frames[m_cur]);
     commit(text, mid(field));
     updateCanvasFrame();
+}
+
+void MainWindow::animateEffect()
+{
+    if (!requireKeyframe()) return;
+    QVector<int> ids;
+    for (int id : m_canvas->selectedIds()) {
+        const Shape* s = curFrame().find(id);
+        if (s && s->type == ShapeType::Effect) ids << id;
+    }
+    if (ids.isEmpty())  // nothing selected: animate every effect in the frame
+        for (const Shape& s : curFrame().shapes)
+            if (s.type == ShapeType::Effect) ids << s.id;
+    if (ids.isEmpty()) {
+        log(tr("Select an effect first (or place one with the Effect tool, key K)."));
+        return;
+    }
+
+    const int n = m_fxFrames ? m_fxFrames->value() : 12;
+    const int dur = curFrame().durationMs;
+    for (int id : ids)
+        if (Shape* s = curFrame().find(id)) s->effectTime = 0;
+    Frame end = curFrame();
+    for (int id : ids)
+        if (Shape* s = end.find(id)) s->effectTime = 1;
+
+    Frame tw;
+    tw.tweenCount = qMax(1, n - 2);
+    tw.tweenEase = 0;  // linear: steady particle motion
+    tw.tweenSquash = 0;
+    tw.durationMs = dur;
+    m_doc.frames.insert(m_cur + 1, tw);
+    m_doc.frames.insert(m_cur + 2, end);
+    commit(tr("Animate effect"));
+    setCurrentFrame(m_cur);
+    log(tr("Effect plays over %1 frames: keyframe %2 (0%) → live tween → keyframe %3 (100%). "
+           "Press Play to preview; Bake the tween if you want editable frames.")
+            .arg(n).arg(m_cur + 1).arg(m_cur + 3));
+}
+
+void MainWindow::surpriseEffect()
+{
+    if (m_canvas->selectedIds().isEmpty()) return;
+    auto* rng = QRandomGenerator::global();
+    const int preset = rng->bounded(effectCount());
+    const int seed = rng->bounded(1, 1000000);
+    const int count = 24 + rng->bounded(50);
+    const double density = 0.7 + rng->bounded(100) / 100.0;
+    const double time = rng->bounded(100) / 100.0;
+    QColor fill, accent;
+    effectDefaults(preset, fill, accent);
+    const int hueShift = rng->bounded(-35, 36);
+    fill = QColor::fromHsv((fill.hue() + hueShift + 360) % 360, qBound(80, fill.saturation() + rng->bounded(-30, 20), 255), 255);
+    accent = QColor::fromHsv((accent.hue() + hueShift + 360) % 360, qBound(40, accent.saturation() - rng->bounded(0, 60), 255), 255);
+
+    editAll([=](Shape& s) {
+        if (s.type != ShapeType::Effect) return;
+        s.effectPreset = preset;
+        s.effectSeed = seed + s.id;
+        s.sides = count;
+        s.effectDensity = density;
+        s.innerRatio = rng->bounded(10, 90) / 100.0;
+        s.effectTime = time;
+        s.fill = fill;
+        s.accent = accent;
+    }, tr("Surprise effect"), 51);
+    log(tr("Surprise: %1, seed %2. Press Animate to give it a life of its own.")
+            .arg(effectNames().at(preset)).arg(seed));
 }
 
 void MainWindow::setFrameDurations(int ms, bool all)

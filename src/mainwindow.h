@@ -123,6 +123,8 @@ private:
     void updateCanvasFrame();   // what the canvas shows for the current frame (+ onion skin)
     void tweenBake();
     void editTween(const std::function<void(Frame&)>& fn, const QString& text, int field);
+    void animateEffect();  // build keyframes + a dynamic tween for selected effects
+    void surpriseEffect(); // randomise the selected effects
     void playStep();
 
     Document m_doc, m_committed;
@@ -188,6 +190,11 @@ private:
     QComboBox *m_twEase = nullptr, *m_twPath = nullptr;
     QSpinBox* m_twArc = nullptr;
     QLabel* m_twInfo = nullptr;
+    // effects
+    QGroupBox* m_fxBox = nullptr;
+    QComboBox* m_fxPreset = nullptr;
+    QDoubleSpinBox* m_fxTime = nullptr;
+    QSpinBox *m_fxParticles = nullptr, *m_fxDensity = nullptr, *m_fxSeed = nullptr, *m_fxFrames = nullptr;
     QComboBox* m_jType = nullptr;
     QCheckBox* m_jLim = nullptr;
     QDoubleSpinBox *m_jMin = nullptr, *m_jMax = nullptr, *m_jStiff = nullptr;

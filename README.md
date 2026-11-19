@@ -39,6 +39,7 @@ To run the headless smoke test: `./build/tood --selftest /some/dir`
 | B Z | Polyline, Curve | Click points: straight segments, or a smooth curve through them. Double-click or Enter finishes; click the first point to close; Backspace removes the last point; Esc cancels. |
 | X | Text | Font, size, bold, italic and alignment are in Properties. |
 | G | Speech bubble | Click to place text in a bubble and type it. Drag the yellow handle to point the tail; drop it on a shape (with *Sticky ends* on, no Shift) to glue it, so it follows the speaker; drop it on empty space or hold Shift to keep it free. Style (speech, thought, shout, box) and colours in Properties; any text can get a bubble there. In tweens, changing text is typed in letter by letter and the bubble grows with it. |
+| K | Effect | Click or drag to place a procedural particle effect: **Explosion**, **Fire**, **Smoke**, **Shockwave**, **Confetti**, **Magic sparkles** or **Star burst (impact)**. Use *Animate* in Properties to make it play over N frames, or tween *Time* yourself. |
 | O | Point | Helper point. Visible while editing, never exported. |
 | C | Connect | Click a point on shape A, then a point on shape B; B moves so the points meet. Click the same spot twice to join overlapping shapes. |
 | I | Pin | Click where shapes overlap to connect them at that exact point (nothing moves). "Pin joins" in the toolbar: the **top two** shapes, or **all** shapes under the spot (Ctrl+click = the other mode). Uses the "Connect as" type; the lower shape is the parent. Handy after drawing, e.g. a circle on top of a rectangle. |
@@ -75,6 +76,19 @@ Click a joint marker to select it. Drag the marker to move the pivot. In Propert
 - **Any shape:** Lock aspect, Stretch % (squash/stretch along an angle) and Reset warp.
 - **Eye:** fill (white of the eye), stroke (outline) and a separate **pupil** colour.
 - **Path** (freehand, polyline, curve): drag its points with the Select tool to reshape it. *Closed* (closed paths can be filled) and *Straight / Smooth* are in Properties. A tween between two keyframes morphs the shape when both have the same number of points.
+
+## Effects
+Effects are ordinary shapes with a **Time** property (0–100%), so they show up in thumbnails, playback and every export format (MP4, WebM, GIF, PNG, SVG). They are drawn from a stateless hash of the seed and particle number, so a given time always renders identically — no simulation state to get out of sync when you undo, tween or export.
+
+- **Explosion** — flash, fireball, blast ring, trailing sparks and rising smoke.
+- **Fire** — looping flames and embers.
+- **Smoke** — looping soft puffs that expand as they rise.
+- **Shockwave** — expanding rings and radiating spokes.
+- **Confetti** — falling, tumbling coloured pieces.
+- **Magic sparkles** — looping twinkling stars.
+- **Star burst (impact)** — a hit flash, then stars shooting outward while they pulse, spin and fade. Put one where something gets hit.
+
+Properties for an effect: preset, Time/Phase, particle count, density, seed, main colour and highlight colour, plus **Spread** (how far the particles travel). **Surprise me** picks a random preset, palette and seed. **Animate** is the quick way to play an effect: it sets Time to 0% on the current frame, adds a keyframe at 100% and inserts a live tween of the chosen length between them (linear easing, so particle motion stays even). You can also keyframe Time by hand, and Bake the tween when you want plain editable frames. Like any shape, an effect can be glued to a parent joint so it travels with a character.
 
 ## Library
 Save objects for reuse with **Add Selection to Library** (Ctrl+B). Select a few connected items plus some standalone ones (Ctrl+L extends the selection to everything connected), then give them a name. Joints, glued lines, groups and images are kept. The **Library** panel shows thumbnails: double-click an item to insert it at the view centre, or drag it onto the canvas. The library is shared by all projects and stored as small `.tood` files in `~/.local/share/TooD/TooD/library/` (open the folder with the "…" button).
@@ -129,6 +143,7 @@ Plain (uncompressed) JSON `.tood` files also open, so files from older versions 
 | File | Contents |
 |---|---|
 | `src/model.*` | Document, chapters, frames, shapes, joints; rendering; file format |
+| `src/effects.*` | Procedural particle effects (deterministic, pure function of shape settings + Time) |
 | `src/solver.*` | Connection constraints, elastic springs, stretchy lines, tweening |
 | `src/canvas.*` | The editing view (QGraphicsView): tools, snapping, handles |
 | `src/mainwindow.*` | UI: panels, timeline, library, undo, file I/O, export |

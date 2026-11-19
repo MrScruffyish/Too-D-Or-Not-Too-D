@@ -40,7 +40,7 @@ public:
     enum Tool {
         ToolSelect, ToolWarp,
         ToolRect, ToolEllipse, ToolTriangle, ToolPolygon, ToolStar, ToolDiamond, ToolHourglass, ToolEye,
-        ToolLine, ToolArrow, ToolFreehand, ToolPolyline, ToolCurve, ToolText, ToolBubble, ToolPoint,
+        ToolLine, ToolArrow, ToolFreehand, ToolPolyline, ToolCurve, ToolText, ToolBubble, ToolEffect, ToolPoint,
         ToolConnect, ToolPin, ToolMidpoint, ToolPerpendicular, ToolParallel, ToolMeasure,
         ToolCount
     };

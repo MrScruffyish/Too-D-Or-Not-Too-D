@@ -15,6 +15,7 @@ find_package(ZLIB REQUIRED)
 add_executable(tood
   src/main.cpp
   src/model.h       src/model.cpp
+  src/effects.h     src/effects.cpp
   src/solver.h      src/solver.cpp
   src/gifwriter.h   src/gifwriter.cpp
   src/oplog.h       src/oplog.cpp
