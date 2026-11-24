@@ -185,10 +185,10 @@ static void effectDefaults(int preset, QColor& fill, QColor& accent)
 {
     static const QColor fills[] = {QColor(255, 138, 30),  QColor(255, 90, 0),   QColor(185, 190, 200),
                                    QColor(79, 195, 255), QColor(255, 94, 138), QColor(155, 123, 255),
-                                   QColor(255, 170, 40)};
+                                   QColor(255, 170, 40), QColor(120, 35, 45)};
     static const QColor accents[] = {QColor(255, 224, 122), QColor(255, 216, 61), QColor(232, 234, 238),
                                      QColor(255, 255, 255), QColor(255, 213, 79), QColor(255, 243, 160),
-                                     QColor(255, 250, 210)};
+                                     QColor(255, 250, 210), QColor(235, 105, 125)};
     const int i = qBound(0, preset, int(sizeof(fills) / sizeof(fills[0])) - 1);
     fill = fills[i];
     accent = accents[i];
@@ -748,6 +748,9 @@ void MainWindow::buildActions()
     m_actFrameLeft = act(tr("◀ Move"), QKeySequence(), [this] { frameMove(-1); });
     m_actFrameRight = act(tr("Move ▶"), QKeySequence(), [this] { frameMove(1); });
     m_actTween = act(tr("Tween…"), QKeySequence(), [this] { frameTween(); });
+    m_actTextTween = act(tr("Text tween (typewriter)"), QKeySequence(), [this] { toggleTextTween(); });
+    m_actTextTween->setToolTip(tr("Turn this frame's Text/bubble into a first-class typewriter tween: "
+                                  "letters appear at a set rate, then linger, then a hard cut to the next frame."));
     m_actPrev = act(tr("Previous Frame"), QKeySequence(), [this] { setCurrentFrame(m_cur - 1); });
     m_actNext = act(tr("Next Frame"), QKeySequence(), [this] { setCurrentFrame(m_cur + 1); });
     m_actPlay = act(tr("Play"), QKeySequence(), [this] { togglePlay(); }, themeIcon("media-playback-start", QStyle::SP_MediaPlay));
@@ -760,6 +763,7 @@ void MainWindow::buildActions()
         {m_actFrameLeft, {QKeySequence(tr("Alt+PgUp")), QKeySequence(tr("Alt+,"))}},
         {m_actFrameRight, {QKeySequence(tr("Alt+PgDown")), QKeySequence(tr("Alt+."))}},
         {m_actTween, {QKeySequence(tr("Ctrl+T"))}},
+        {m_actTextTween, {QKeySequence(tr("Ctrl+Shift+T"))}},
         {m_actPrev, {QKeySequence(Qt::Key_PageUp), QKeySequence(tr(","))}},
         {m_actNext, {QKeySequence(Qt::Key_PageDown), QKeySequence(tr("."))}},
         {m_actPlay, {QKeySequence(tr("Ctrl+Return")), QKeySequence(tr("Ctrl+Space"))}},
@@ -897,7 +901,7 @@ void MainWindow::buildMenus()
     QMenu* fr = menuBar()->addMenu(tr("F&rames"));
     fr->addActions({m_actFrameNew, m_actFrameBlank, m_actFrameDup, m_actFrameDel});
     fr->addSeparator();
-    fr->addActions({m_actFrameLeft, m_actFrameRight, m_actTween});
+    fr->addActions({m_actFrameLeft, m_actFrameRight, m_actTween, m_actTextTween});
     fr->addSeparator();
     fr->addActions({m_actPrev, m_actNext, m_actPlay});
 
@@ -1415,6 +1419,62 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     connect(m_twArc, &QSpinBox::valueChanged, this, [this](int a) { editTween([a](Frame& f) { f.tweenArc = a; }, tr("Tween arc"), 45); });
     connect(bake, &QPushButton::clicked, this, [this] { tweenBake(); });
 
+    // ---------------- first-class text tween (typewriter + linked mouth)
+    m_textTweenBox = new QGroupBox(tr("Text tween (typewriter)"));
+    auto* ttf = new QFormLayout(m_textTweenBox);
+    m_ttEnabled = new QCheckBox(tr("This frame types its text"));
+    m_ttEnabled->setToolTip(tr("Off: a normal frame with the whole line. On: playback/export generate a typed strip, "
+                               "then hold it, then cut hard to the next frame."));
+    m_ttRate = dspin(0.1, 24, 0.1, 1, tr(" chars/frame"));
+    m_ttRate->setToolTip(tr("Characters revealed per generated frame. Lower = slower typing. "
+                            "This value overrides the global default for this line."));
+    m_ttLinger = new QSpinBox;
+    m_ttLinger->setRange(0, 600);
+    m_ttLinger->setSuffix(tr(" frames"));
+    m_ttLinger->setKeyboardTracking(false);
+    m_ttLinger->setToolTip(tr("Hold the finished line this long before the hard cut to the next frame."));
+    m_ttMouth = new QComboBox;
+    m_ttMouth->setToolTip(tr("Which Mouth effect articulates this line. Auto = first Mouth effect in this frame."));
+    m_ttBeats = new QSpinBox;
+    m_ttBeats->setRange(0, 64);
+    m_ttBeats->setSpecialValueText(tr("auto (one per syllable)"));
+    m_ttBeats->setKeyboardTracking(false);
+    m_ttDefault = new QPushButton(tr("Use this rate as default"));
+    m_ttDefault->setToolTip(tr("Store this rate for new text tweens. Per-line overrides are kept."));
+    m_ttInfo = new QLabel;
+    m_ttInfo->setWordWrap(true);
+    ttf->addRow(m_ttEnabled);
+    ttf->addRow(tr("Rate"), m_ttRate);
+    ttf->addRow(tr("Linger"), m_ttLinger);
+    ttf->addRow(tr("Mouth"), m_ttMouth);
+    ttf->addRow(tr("Beats"), m_ttBeats);
+    ttf->addRow(m_ttDefault);
+    ttf->addRow(m_ttInfo);
+    v->addWidget(m_textTweenBox);
+    connect(m_ttEnabled, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_updatingProps || on == m_doc.frames.at(m_cur).isTextTween()) return;
+        toggleTextTween();
+    });
+    connect(m_ttRate, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double r) {
+        editTextTween([r](Frame& f) { f.textRate = r; }, tr("Text tween rate"), 61);
+    });
+    connect(m_ttLinger, &QSpinBox::valueChanged, this, [this](int n) {
+        editTextTween([n](Frame& f) { f.textLinger = n; }, tr("Text tween linger"), 62);
+    });
+    connect(m_ttMouth, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0) return;
+        const int id = m_ttMouth->itemData(idx).toInt();
+        editTextTween([id](Frame& f) { f.textMouth = id; }, tr("Text tween mouth"), 63);
+    });
+    connect(m_ttBeats, &QSpinBox::valueChanged, this, [this](int b) {
+        editTextTween([b](Frame& f) { f.textBeats = b; }, tr("Text tween beats"), 64);
+    });
+    connect(m_ttDefault, &QPushButton::clicked, this, [this] {
+        QSettings().setValue("textRate", m_ttRate->value());
+        QSettings().setValue("textLinger", m_ttLinger->value());
+        log(tr("Default typing rate set to %1 chars/frame, linger %2 frames.").arg(m_ttRate->value()).arg(m_ttLinger->value()));
+    });
+
     // ---------------- procedural effects
     m_fxBox = new QGroupBox(tr("Effect (particles)"));
     auto* fx = new QFormLayout(m_fxBox);
@@ -1440,7 +1500,12 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
     m_fxFrames->setRange(2, 240);
     m_fxFrames->setValue(12);
     m_fxFrames->setToolTip(tr("Length of the animation created by Animate (in frames)."));
+    m_mouthBeats = new QSpinBox;
+    m_mouthBeats->setRange(1, 24);
+    m_mouthBeats->setValue(5);
+    m_mouthBeats->setToolTip(tr("How many times the mouth opens and closes during one loop of Phase."));
     fx->addRow(tr("Effect"), m_fxPreset);
+    fx->addRow(tr("Beats"), m_mouthBeats);
     fx->addRow(tr("Time"), m_fxTime);
     fx->addRow(tr("Particles"), m_fxParticles);
     fx->addRow(tr("Density"), m_fxDensity);
@@ -1464,8 +1529,12 @@ void MainWindow::buildPropertyPanel(QWidget* pw)
             if (s.type != ShapeType::Effect) return;
             s.effectPreset = i;
             s.effectTime = 0;
+            if (i == mouthEffectPreset()) s.effectTime = 0.5 / qMax(1, s.mouthBeats);  // show an open pose
             effectDefaults(i, s.fill, s.accent);
         }, tr("Effect preset"), 46);
+    });
+    connect(m_mouthBeats, &QSpinBox::valueChanged, this, [this](int val) {
+        editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.mouthBeats = val; }, tr("Mouth beats"), 52);
     });
     connect(m_fxTime, &QDoubleSpinBox::valueChanged, this, [this](double val) {
         editAll([val](Shape& s) { if (s.type == ShapeType::Effect) s.effectTime = val / 100.0; }, tr("Effect time"), 47);
@@ -1659,7 +1728,7 @@ void MainWindow::applySnapshot(const Document& d, int frame)
 void MainWindow::setCurrentFrame(int i, bool fromTimeline)
 {
     if (i != m_cur) OpLog::op(QStringLiteral("frame %1 -> %2%3").arg(m_cur + 1).arg(i + 1)
-                                  .arg(i >= 0 && i < m_doc.frames.size() && m_doc.frames.at(i).isTween() ? " (dynamic tween)" : ""));
+                                  .arg(i >= 0 && i < m_doc.frames.size() && m_doc.frames.at(i).isTextTween() ? " (text tween)" : m_doc.frames.at(i).isTween() ? " (dynamic tween)" : ""));
     m_canvas->finishSpring(true);
     i = qBound(0, i, m_doc.frames.size() - 1);
     if (i != m_cur || m_canvas->frameIndex() != i) {
@@ -1679,20 +1748,27 @@ void MainWindow::setCurrentFrame(int i, bool fromTimeline)
     refreshProps();
 }
 
-// Cache key for a dynamic tween's thumbnail: changes when either keyframe or a setting changes.
+// Cache key for a computed frame's thumbnail: changes when its inputs/settings change.
 static QString tweenThumbKey(const QVector<Frame>& fr, int i, int* ia = nullptr, int* ib = nullptr)
 {
+    const Frame& f = fr.at(i);
+    if (f.isTextTween()) {  // generated typed strip: only this frame's content/settings matter
+        if (ia) *ia = i;
+        if (ib) *ib = -1;
+        return QStringLiteral("tt:%1:%2:%3:%4:%5:%6")
+            .arg(quintptr(f.shapes.constData())).arg(f.textShape).arg(f.textRate)
+            .arg(f.textLinger).arg(f.textMouth).arg(f.textBeats);
+    }
     int a = i - 1, b = i + 1;
-    while (a >= 0 && fr.at(a).isTween()) --a;
-    while (b < fr.size() && fr.at(b).isTween()) ++b;
+    while (a >= 0 && fr.at(a).isComputed()) --a;
+    while (b < fr.size() && fr.at(b).isComputed()) ++b;
     if (ia) *ia = a;
     if (ib) *ib = b;
     if (a < 0 || b >= fr.size()) return QStringLiteral("none");
-    const Frame& t = fr.at(i);
     return QStringLiteral("%1:%2:%3:%4:%5:%6:%7:%8:%9")
         .arg(quintptr(fr.at(a).shapes.constData())).arg(quintptr(fr.at(b).shapes.constData()))
         .arg(quintptr(fr.at(a).joints.constData())).arg(quintptr(fr.at(b).joints.constData()))
-        .arg(t.tweenCount).arg(t.tweenEase).arg(t.tweenSquash).arg(t.tweenPath).arg(t.tweenArc);
+        .arg(f.tweenCount).arg(f.tweenEase).arg(f.tweenSquash).arg(f.tweenPath).arg(f.tweenArc);
 }
 
 void MainWindow::refreshTimeline()
@@ -1707,12 +1783,23 @@ void MainWindow::refreshTimeline()
         const Frame& f = m_doc.frames.at(i);
         total += Solver::frameSpanMs(m_doc.frames, i);
         QListWidgetItem* it = m_timeline->item(i);
-        const QString txt = f.isTween() ? QStringLiteral("%1 · ◆ tween ×%2").arg(i + 1).arg(f.tweenCount)
-                                        : QStringLiteral("%1 · %2 ms").arg(i + 1).arg(f.durationMs);
+        QString txt;
+        if (f.isTween()) txt = QStringLiteral("%1 · ◆ tween ×%2").arg(i + 1).arg(f.tweenCount);
+        else if (f.isTextTween()) txt = QStringLiteral("%1 · TYPE ×%2 +%3")
+                                       .arg(i + 1).arg(Solver::textTweenFrameCount(f)).arg(f.textLinger);
+        else txt = QStringLiteral("%1 · %2 ms").arg(i + 1).arg(f.durationMs);
         if (it->text() != txt) it->setText(txt);
-        if (f.isTween()) {
-            it->setBackground(QColor(255, 222, 160));
-            it->setToolTip(tr("Dynamic tween: %1 frames × %2 ms, computed from the neighbouring keyframes").arg(f.tweenCount).arg(f.durationMs));
+        if (f.isComputed()) {
+            it->setBackground(f.isTextTween() ? QColor(205, 240, 220) : QColor(255, 222, 160));
+            if (f.isTextTween())
+                it->setToolTip(tr("Text tween: types %1 chars/frame for %2 frames, holds %3 frames, then a hard cut. "
+                                  "Linked mouth: %4, beats: %5")
+                                   .arg(f.textRate).arg(Solver::textTweenFrameCount(f)).arg(f.textLinger)
+                                   .arg(f.textMouth < 0 ? tr("none") : f.textMouth == 0 ? tr("auto") : QString::number(f.textMouth))
+                                   .arg(f.textBeats ? QString::number(f.textBeats) : tr("auto")));
+            else
+                it->setToolTip(tr("Dynamic tween: %1 frames × %2 ms, computed from the neighbouring keyframes")
+                                   .arg(f.tweenCount).arg(f.durationMs));
             const QString tk = tweenThumbKey(m_doc.frames, i);
             auto tt = m_tweenThumbs.constFind(tk);
             if (tt == m_tweenThumbs.constEnd()) {
@@ -1780,7 +1867,7 @@ void MainWindow::renderThumbs()
     for (int k = 0; k < n; ++k) {
         const int fi = (first + k) % n;
         const Frame& f = m_doc.frames.at(fi);
-        if (f.isTween()) {
+        if (f.isComputed()) {
             int a = -1, b = -1;
             const QString tk = tweenThumbKey(m_doc.frames, fi, &a, &b);
             if (m_tweenThumbs.contains(tk)) continue;
@@ -1788,13 +1875,13 @@ void MainWindow::renderThumbs()
                 more = true;
                 break;
             }
-            const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, fi);
+            const QVector<Frame> gen = Solver::computedFrames(m_doc.frames, fi);
             QImage img = gen.isEmpty() ? QImage(ts, QImage::Format_ARGB32_Premultiplied)
                                        : renderFrameImage(m_doc, gen.at(gen.size() / 2), sc, true, Qt::white);
-            if (gen.isEmpty()) img.fill(QColor(255, 222, 160));
+            if (gen.isEmpty()) img.fill(f.isTextTween() ? QColor(205, 240, 220) : QColor(255, 222, 160));
             if (m_tweenThumbs.size() > 500) m_tweenThumbs.clear();
             m_tweenThumbs.insert(tk, TweenThumb{a >= 0 ? m_doc.frames.at(a).shapes : QVector<Shape>(),
-                                                b < n ? m_doc.frames.at(b).shapes : QVector<Shape>(), QIcon(QPixmap::fromImage(img))});
+                                                b >= 0 && b < n ? m_doc.frames.at(b).shapes : QVector<Shape>(), QIcon(QPixmap::fromImage(img))});
             continue;
         }
         const void* key = f.shapes.constData();
@@ -1819,6 +1906,7 @@ void MainWindow::refreshProps()
     const int ji = f.jointIndex(m_canvas->selectedJoint());
     const Frame& cf = m_doc.frames.at(m_cur);
     m_tweenBox->setVisible(cf.isTween());
+    m_textTweenBox->setVisible(false);
     if (cf.isTween()) {
         m_shapeBox->setVisible(false);
         m_jointBox->setVisible(false);
@@ -1838,6 +1926,24 @@ void MainWindow::refreshProps()
                              : tr("⚠ Needs a keyframe both before and after it."));
         m_updatingProps = false;
         return;
+    }
+    // Show the text-tween controls when this frame is one, or when a text shape is selected
+    // so the checkbox is discoverable before converting the frame.
+    const bool textSelected = s && s->type == ShapeType::Text;
+    m_textTweenBox->setVisible(cf.isTextTween() || textSelected);
+    if (m_textTweenBox->isVisible()) {
+        m_ttEnabled->setChecked(cf.isTextTween());
+        m_ttRate->setValue(cf.textRate);
+        m_ttLinger->setValue(cf.textLinger);
+        m_ttBeats->setValue(cf.textBeats);
+        refreshTextMouthCombo(cf);
+        const int typeN = Solver::textTweenFrameCount(cf);
+        m_ttInfo->setText(cf.isTextTween()
+            ? tr("This frame stores the full line. Playback/export show %1 typed frames, then %2 held frames, "
+                 "then a hard cut to the next frame. Edit the text normally; the strip follows.")
+                .arg(typeN).arg(cf.textLinger)
+            : tr("Tick above to type this frame's text over time. The frame keeps its full text; "
+                 "typing, linger and the cut are generated on playback/export."));
     }
     m_shapeBox->setVisible(s);
     m_fxBox->setVisible(s && s->type == ShapeType::Effect);
@@ -1886,9 +1992,15 @@ void MainWindow::refreshProps()
             m_fxParticles->setValue(s->sides);
             m_fxDensity->setValue(qRound(s->effectDensity * 100));
             m_fxSeed->setValue(s->effectSeed);
-            if (auto* fl = qobject_cast<QFormLayout*>(m_fxBox->layout()))
+            m_mouthBeats->setValue(s->mouthBeats);
+            if (auto* fl = qobject_cast<QFormLayout*>(m_fxBox->layout())) {
+                const bool mouth = s->effectPreset == mouthEffectPreset();
+                fl->setRowVisible(m_mouthBeats, mouth);
+                fl->setRowVisible(m_fxParticles, !mouth);
+                fl->setRowVisible(m_fxDensity, !mouth);
                 if (QLabel* lab = qobject_cast<QLabel*>(fl->labelForField(m_fxTime)))
                     lab->setText(effectLoops(s->effectPreset) ? tr("Phase") : tr("Time"));
+            }
         }
 
         const ShapeType t = s->type;
@@ -1905,6 +2017,7 @@ void MainWindow::refreshProps()
         row(m_lock, !lin && !pt);
         m_lock->setText(ell ? tr("Circle (radius X = Y)") : tr("Lock aspect"));
         const bool fx = t == ShapeType::Effect;
+        const bool mouth = fx && s->effectPreset == mouthEffectPreset();
         row(m_sq, !lin && !pt && !fx);
         row(m_sqa, !lin && !pt && !fx);
         row(m_resetWarp, s->hasWarp() && !fx);
@@ -1912,22 +2025,22 @@ void MainWindow::refreshProps()
         row(m_pathClosed, t == ShapeType::Path);
         row(m_pathCurve, t == ShapeType::Path);
         if (t == ShapeType::Path && single) m_typeLabel->setText(tr("Path #%1 (%2 points)").arg(s->id).arg(s->pts.size()));
-        label(m_fill, text ? tr("Colour") : fx ? tr("Main colour") : tr("Fill"));
-        row(m_stroke, (!text || s->bubble) && !pt && !fx);
+        label(m_fill, mouth ? tr("Inside") : text ? tr("Colour") : fx ? tr("Main colour") : tr("Fill"));
+        row(m_stroke, (!text || s->bubble) && !pt && !(fx && !mouth));
         row(m_bubble, text);
         row(m_bubbleFill, text && s->bubble);
         row(m_accent, t == ShapeType::Eye || fx);
-        label(m_accent, fx ? tr("Highlight") : tr("Pupil"));
-        row(m_sw, (!text || s->bubble) && !pt && !fx);
+        label(m_accent, mouth ? tr("Tongue") : fx ? tr("Highlight") : tr("Pupil"));
+        row(m_sw, (!text || s->bubble) && !pt && !(fx && !mouth));
         row(m_op, !pt);
         row(m_cr, t == ShapeType::Rect);
         const bool hasSides = t == ShapeType::Polygon || t == ShapeType::Star || t == ShapeType::Diamond ||
                               (lin && s->lineStyle == 1) || fx;
-        row(m_sides, hasSides);
+        row(m_sides, hasSides && !mouth);
         label(m_sides, fx ? tr("Particle count") : lin ? tr("Coils") : t == ShapeType::Star ? tr("Points")
                                                       : t == ShapeType::Diamond ? tr("Corners") : tr("Sides"));
         row(m_inner, t == ShapeType::Star || t == ShapeType::Hourglass || t == ShapeType::Eye || fx);
-        label(m_inner, fx ? tr("Spread") : t == ShapeType::Hourglass ? tr("Waist")
+        label(m_inner, mouth ? tr("Narrowing") : fx ? tr("Spread") : t == ShapeType::Hourglass ? tr("Waist")
                           : t == ShapeType::Eye ? tr("Iris size") : tr("Inner ratio"));
         row(m_lineStyle, lin);
         row(m_amp, lin && s->lineStyle == 1);
@@ -2305,7 +2418,7 @@ void MainWindow::exportAnimation()
     auto expandRange = [](const QVector<Frame>& fr, int a0, int a1) {
         QVector<Frame> out;
         for (int i = a0; i <= a1 && i < fr.size(); ++i) {
-            if (fr.at(i).isTween()) out += Solver::tweenFrames(fr, i);
+            if (fr.at(i).isComputed()) out += Solver::computedFrames(fr, i);
             else out << fr.at(i);
         }
         return out;
@@ -2759,20 +2872,20 @@ void MainWindow::updateCanvasFrame()
     // motion paths: the tween itself, or the tweens next to the keyframe being edited
     {
         QVector<Frame> ghosts;
-        const auto keyBefore = [this](int i) { while (i >= 0 && m_doc.frames.at(i).isTween()) --i; return i; };
-        const auto keyAfter = [this](int i) { while (i < m_doc.frames.size() && m_doc.frames.at(i).isTween()) ++i; return i; };
+        const auto keyBefore = [this](int i) { while (i >= 0 && m_doc.frames.at(i).isComputed()) --i; return i; };
+        const auto keyAfter = [this](int i) { while (i < m_doc.frames.size() && m_doc.frames.at(i).isComputed()) ++i; return i; };
         if (f.isTween()) {
             const int a = keyBefore(m_cur - 1), b = keyAfter(m_cur + 1);
             const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
             if (!gen.isEmpty() && a >= 0 && b < m_doc.frames.size()) ghosts << m_doc.frames.at(a) << gen << m_doc.frames.at(b);
         } else {
-            if (m_cur > 0 && m_doc.frames.at(m_cur - 1).isTween()) {
+            if (m_cur > 0 && m_doc.frames.at(m_cur - 1).isComputed()) {
                 const int a = keyBefore(m_cur - 1);
                 const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur - 1);
                 if (a >= 0 && !gen.isEmpty()) ghosts << m_doc.frames.at(a) << gen;
             }
             ghosts << f;
-            if (m_cur + 1 < m_doc.frames.size() && m_doc.frames.at(m_cur + 1).isTween()) {
+            if (m_cur + 1 < m_doc.frames.size() && m_doc.frames.at(m_cur + 1).isComputed()) {
                 const int b = keyAfter(m_cur + 1);
                 const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur + 1);
                 if (b < m_doc.frames.size() && !gen.isEmpty()) ghosts << gen << m_doc.frames.at(b);
@@ -2783,8 +2896,8 @@ void MainWindow::updateCanvasFrame()
     }
     if (m_cur > 0) {
         const Frame& prev = m_doc.frames.at(m_cur - 1);
-        if (prev.isTween()) {
-            const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur - 1);
+        if (prev.isComputed()) {
+            const QVector<Frame> gen = Solver::computedFrames(m_doc.frames, m_cur - 1);
             if (gen.isEmpty()) m_canvas->setOnionFrame(nullptr);
             else m_canvas->setOnionFrame(&gen.constLast());
         } else {
@@ -2803,6 +2916,8 @@ void MainWindow::frameNewCopy()
         const QVector<Frame> gen = Solver::tweenFrames(m_doc.frames, m_cur);
         copy = gen.isEmpty() ? Frame() : gen.at(gen.size() / 2);
     }
+    if (copy.isTextTween())  // a copy is a normal keyframe holding the whole line
+        copy.textTween = false;
     m_doc.frames.insert(m_cur + 1, copy);
     m_cur += 1;
     m_canvas->setFrameIndex(m_cur);
@@ -2865,7 +2980,7 @@ void MainWindow::frameMove(int dir)
 void MainWindow::frameTween()
 {
     if (!requireKeyframe()) return;
-    if (m_cur + 1 >= m_doc.frames.size() || m_doc.frames.at(m_cur + 1).isTween()) {
+    if (m_cur + 1 >= m_doc.frames.size() || m_doc.frames.at(m_cur + 1).isComputed()) {
         log(tr("Tween needs a next keyframe: make one with \"New Frame (copy)\", change it, then select the first frame and run Tween."));
         return;
     }
@@ -2936,8 +3051,8 @@ void MainWindow::frameTween()
     const QVector<Frame> mids = Solver::makeTweens(m_doc.frames.at(m_cur), m_doc.frames.at(m_cur + 1), n,
                                                    easing->currentIndex(), squash->value() / 100.0, dur->value(),
                                                    path->currentIndex(), arc->value(),
-                                                   m_cur > 0 && !m_doc.frames.at(m_cur - 1).isTween() ? &m_doc.frames.at(m_cur - 1) : nullptr,
-                                                   m_cur + 2 < m_doc.frames.size() && !m_doc.frames.at(m_cur + 2).isTween() ? &m_doc.frames.at(m_cur + 2) : nullptr);
+                                                   m_cur > 0 && !m_doc.frames.at(m_cur - 1).isComputed() ? &m_doc.frames.at(m_cur - 1) : nullptr,
+                                                   m_cur + 2 < m_doc.frames.size() && !m_doc.frames.at(m_cur + 2).isComputed() ? &m_doc.frames.at(m_cur + 2) : nullptr);
     for (int k = 0; k < mids.size(); ++k) m_doc.frames.insert(m_cur + 1 + k, mids.at(k));
     commit(tr("Tween"));
     log(tr("Inserted %1 in-between frames after frame %2").arg(n).arg(m_cur + 1));
@@ -2966,6 +3081,69 @@ void MainWindow::editTween(const std::function<void(Frame&)>& fn, const QString&
     fn(m_doc.frames[m_cur]);
     commit(text, mid(field));
     updateCanvasFrame();
+}
+
+void MainWindow::editTextTween(const std::function<void(Frame&)>& fn, const QString& text, int field)
+{
+    if (m_updatingProps || !m_doc.frames.at(m_cur).isTextTween()) return;
+    fn(m_doc.frames[m_cur]);
+    commit(text, mid(field));
+    updateCanvasFrame();
+}
+
+void MainWindow::refreshTextMouthCombo(const Frame& f)
+{
+    if (!m_ttMouth) return;
+    const int current = f.textMouth;
+    m_ttMouth->blockSignals(true);
+    m_ttMouth->clear();
+    m_ttMouth->addItem(tr("Auto (first Mouth in this frame)"), 0);
+    m_ttMouth->addItem(tr("None"), -1);
+    for (const Shape& s : f.shapes)
+        if (s.type == ShapeType::Effect && s.effectPreset == mouthEffectPreset())
+            m_ttMouth->addItem(tr("Mouth #%1").arg(s.id), s.id);
+    int idx = m_ttMouth->findData(current);
+    if (idx < 0) {
+        m_ttMouth->addItem(tr("Mouth #%1 (missing)").arg(current), current);
+        idx = m_ttMouth->findData(current);
+    }
+    m_ttMouth->setCurrentIndex(qMax(0, idx));
+    m_ttMouth->blockSignals(false);
+}
+
+void MainWindow::toggleTextTween()
+{
+    if (!requireKeyframe()) return;  // a dynamic tween has no editable text
+    Frame& f = curFrame();
+    if (f.isTextTween()) {
+        f.textTween = false;
+        commit(tr("Text tween off"));
+        log(tr("Frame %1 is now a normal frame showing the whole line.").arg(m_cur + 1));
+        refreshProps();
+        return;
+    }
+    int id = 0;
+    for (int sel : m_canvas->selectedIds()) {
+        const Shape* s = f.find(sel);
+        if (s && s->type == ShapeType::Text) { id = sel; break; }
+    }
+    if (!id)
+        for (const Shape& s : f.shapes)
+            if (s.type == ShapeType::Text) { id = s.id; break; }
+    if (!id) {
+        log(tr("Add a Text or speech bubble first (X or G), then run Text tween again."));
+        return;
+    }
+    f.textTween = true;
+    f.textShape = id;
+    f.textRate = qBound(0.1, QSettings().value(QStringLiteral("textRate"), 1.0).toDouble(), 24.0);
+    f.textLinger = qMax(0, QSettings().value(QStringLiteral("textLinger"), 6).toInt());
+    f.textMouth = 0;   // auto-detect a Mouth in this frame
+    f.textBeats = 0;   // derive from syllables
+    commit(tr("Text tween on"));
+    log(tr("Frame %1 now types text #%2 at %3 chars/frame, then holds %4 frames before a hard cut.")
+            .arg(m_cur + 1).arg(id).arg(f.textRate).arg(f.textLinger));
+    refreshProps();
 }
 
 void MainWindow::animateEffect()
@@ -3028,6 +3206,7 @@ void MainWindow::surpriseEffect()
         s.sides = count;
         s.effectDensity = density;
         s.innerRatio = rng->bounded(10, 90) / 100.0;
+        s.mouthBeats = 3 + rng->bounded(6);
         s.effectTime = time;
         s.fill = fill;
         s.accent = accent;
@@ -3050,7 +3229,7 @@ void MainWindow::setFrameDurations(int ms, bool all)
     if (changed) commit(tr("Frame duration"), all ? -1 : mid(40));
 }
 
-// Playback runs over the expanded frame list (dynamic tweens become their in-betweens).
+// Playback runs over the expanded frame list (dynamic and text tweens become their generated frames).
 void MainWindow::togglePlay()
 {
     OpLog::op(m_playing ? QStringLiteral("play: stop") : QStringLiteral("play: start"));
@@ -3071,7 +3250,8 @@ void MainWindow::togglePlay()
     m_playMap.clear();
     m_playPos = 0;
     for (int i = 0; i < m_doc.frames.size(); ++i) {
-        const QVector<Frame> part = m_doc.frames.at(i).isTween() ? Solver::tweenFrames(m_doc.frames, i) : QVector<Frame>{m_doc.frames.at(i)};
+        const QVector<Frame> part = m_doc.frames.at(i).isComputed() ? Solver::computedFrames(m_doc.frames, i)
+                                                                    : QVector<Frame>{m_doc.frames.at(i)};
         if (i == m_cur) m_playPos = m_playSeq.size();
         for (const Frame& f : part) {
             m_playSeq << f;

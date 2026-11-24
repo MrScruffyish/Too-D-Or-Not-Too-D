@@ -79,10 +79,14 @@ Frame tween(const Frame& a, const Frame& b, double t, const TweenOptions& opt = 
 // n in-between frames from a to b (easing, squash, duration per frame).
 QVector<Frame> makeTweens(const Frame& a, const Frame& b, int n, int easeMode, double squash, int durationMs,
                           int path = 0, double arc = 0, const Frame* before = nullptr, const Frame* after = nullptr);
-// Dynamic tweens: the in-betweens a tween frame at index i stands for (empty if it has
-// no keyframe before or after it), and a frame list with all tween frames expanded.
+// Computed frames: dynamic tweens and first-class text tweens. Both are stored as a
+// single frame and expanded on playback/export; text tweens keep their full line and
+// generate a typed strip plus linger frames, with an optional linked Mouth effect.
 QVector<Frame> tweenFrames(const QVector<Frame>& frames, int i);
+int textTweenFrameCount(const Frame& f);
+QVector<Frame> textTweenFrames(const QVector<Frame>& frames, int i);
+QVector<Frame> computedFrames(const QVector<Frame>& frames, int i);
 QVector<Frame> expandFrames(const QVector<Frame>& frames);
-int frameSpanMs(const QVector<Frame>& frames, int i);  // display time incl. expanded tweens
+int frameSpanMs(const QVector<Frame>& frames, int i);  // display time incl. expanded computed frames
 
 }  // namespace Solver

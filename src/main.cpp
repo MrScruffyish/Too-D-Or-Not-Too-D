@@ -1,3 +1,4 @@
+#include "effects.h"
 #include "gifwriter.h"
 #include "mainwindow.h"
 #include "solver.h"
@@ -233,8 +234,60 @@ static int selfTest2(const QString& dir)
     const bool badRejected = !Document::load(bad.fileName(), badBack, &badErr);
     std::printf("format: gzip=%d plain-json loads=%d damaged rejected=%d (%s)\n", isGzip, plainOk, badRejected,
                 qPrintable(badErr));
+
+    // First-class text tween: stored as one full-line keyframe, expanded at render time.
+    Document td;
+    Frame& line = td.frames[0];
+    Shape bubble;
+    bubble.id = td.newId();
+    bubble.type = ShapeType::Text;
+    bubble.text = QStringLiteral("Hello world!");
+    bubble.bubble = 1;
+    bubble.pos = {400, 200};
+    bubble.w = 180;
+    bubble.h = 70;
+    line.shapes << bubble;
+    Shape mouth;
+    mouth.id = td.newId();
+    mouth.type = ShapeType::Effect;
+    mouth.effectPreset = mouthEffectPreset();
+    mouth.pos = {330, 350};
+    mouth.w = 90;
+    mouth.h = 50;
+    line.shapes << mouth;
+    line.textTween = true;
+    line.textShape = bubble.id;
+    line.textRate = 2;
+    line.textLinger = 3;
+    line.textMouth = mouth.id;
+    line.textBeats = 0;
+    line.durationMs = 50;
+    td.frames << Frame();  // next line: hard cut
+    const QString ttPath = QDir(dir).filePath("texttween.tood");
+    td.save(ttPath, &err);
+    Document ttBack;
+    const bool loaded = Document::load(ttPath, ttBack, &err);
+    const Frame& stored = ttBack.frames.at(0);
+    const bool ttSaved = loaded && stored.isTextTween() && stored.textShape == bubble.id &&
+                         qAbs(stored.textRate - 2) < 1e-6 && stored.textLinger == 3 && stored.textMouth == mouth.id;
+    const QVector<Frame> typed = Solver::textTweenFrames(ttBack.frames, 0);
+    const int typeN = Solver::textTweenFrameCount(stored);
+    const QVector<Frame> all = Solver::expandFrames(ttBack.frames);
+    auto lineText = [&](const Frame& fr) { const Shape* s = fr.find(bubble.id); return s ? s->text : QString(); };
+    auto mouthTime = [&](const Frame& fr) { const Shape* s = fr.find(mouth.id); return s ? s->effectTime : -1.0; };
+    bool typedOk = typeN == 7 && typed.size() == 10 && all.size() == 11 &&
+                   lineText(typed.first()) == QStringLiteral("H") &&
+                   lineText(typed.at(typeN - 1)) == QStringLiteral("Hello world!") &&
+                   mouthTime(typed.first()) == 0 && mouthTime(typed.at(typeN / 2)) > 0 &&
+                   mouthTime(typed.constLast()) == 0 &&
+                   !typed.first().isTextTween() && typed.first().tweenCount == 0 &&
+                   all.constLast().shapes.isEmpty();  // next frame: hard cut, no fade
+    std::printf("text tween: stored=%d typed=%d frames (%d typed + %d linger), first='%s', last='%s', beats=%d, hardcut=%d\n",
+                ttSaved, int(typed.size()), typeN, stored.textLinger, qPrintable(lineText(typed.first())),
+                qPrintable(lineText(typed.at(typeN - 1))), typed.isEmpty() ? -1 : typed.first().find(mouth.id)->mouthBeats,
+                all.size() == 11 && all.constLast().shapes.isEmpty());
     return (gapA < 1e-6 && gapB < 1e-6 && gapWhileDragging && !Solver::hasElasticGap(f, 0.5) && chOk && isGzip &&
-            plainOk && badRejected) ? 0 : 1;
+            plainOk && badRejected && ttSaved && typedOk) ? 0 : 1;
 }
 
 int main(int argc, char** argv)

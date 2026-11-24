@@ -10,6 +10,7 @@ struct Shape;
 
 QStringList effectNames();
 int effectCount();
+int mouthEffectPreset();
 bool effectLoops(int preset);
 // Paints in the shape's local coordinate system (centre at origin).
 void paintEffect(QPainter* p, const Shape& s);

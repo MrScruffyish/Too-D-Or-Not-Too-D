@@ -10,10 +10,10 @@
 
 namespace {
 
-enum Preset { Explosion, Fire, Smoke, Shockwave, Confetti, Sparkles, StarBurst };
+enum Preset { Explosion, Fire, Smoke, Shockwave, Confetti, Sparkles, StarBurst, Mouth };
 
 const char* const kNames[] = {"Explosion", "Fire", "Smoke", "Shockwave (radiating)", "Confetti", "Magic sparkles",
-                              "Star burst (impact)"};
+                              "Star burst (impact)", "Mouth (talk)"};
 
 constexpr double kTau = 6.28318530717958647693;
 
@@ -326,6 +326,61 @@ void starBurst(QPainter* p, const Shape& s, double t)
     }
 }
 
+// Talking mouth: a lens-shaped opening that opens, narrows on some syllables,
+// closes, and returns to its original size. One cycle = one beat; Time is a
+// looping phase, so a 0→100% tween plays `mouthBeats` beats and loops seamlessly.
+// Everything is derived from Shape fields, so it renders identically in the
+// editor, playback, tweens and exports.
+void mouth(QPainter* p, const Shape& s, double t)
+{
+    const int beats = qBound(1, s.mouthBeats, 24);
+    const double u = t * beats;
+    const int beat = qMin(beats - 1, int(u));
+    const double cycle = u - beat;                   // 0..1 within this beat
+    const double vary = rnd(s.effectSeed, beat, 0);  // stable for this beat
+
+    // Quick open, short hold, close. A few beats stay shut (a pause in speech).
+    const double bell = std::pow(std::sin(M_PI * cycle), 0.7);
+    const double open = vary < 0.12 ? 0.0 : bell * (0.45 + 0.55 * vary);
+    // Rounded vowels ("o", "w") purse the mouth; the others stay wide.
+    const double narrow = vary > 0.6 ? qBound(0.0, s.innerRatio, 0.9) : 0.0;
+    const double width = 1.0 - narrow * (0.25 + 0.75 * bell);
+
+    const double hw = s.w * 0.5 * width;
+    const double hh = s.h * 0.5 * open;
+    const QColor lip = s.stroke.alpha() > 0 ? s.stroke : s.fill;
+    const double lipW = s.strokeWidth > 0 ? s.strokeWidth : qMax(1.0, qMin(s.w, s.h) * 0.035);
+
+    if (hh < s.h * 0.012) {  // closed: a slight smile, so the rest pose is visible
+        QPainterPath line;
+        line.moveTo(-hw, 0);
+        line.quadTo(0, s.h * 0.10, hw, 0);
+        p->setPen(QPen(lip, lipW, Qt::SolidLine, Qt::RoundCap));
+        p->setBrush(Qt::NoBrush);
+        p->drawPath(line);
+        return;
+    }
+
+    // Upper and lower lip curves meet at the corners, making a lens.
+    QPainterPath opening;
+    opening.moveTo(-hw, 0);
+    opening.quadTo(0, -hh * 1.9, hw, 0);
+    opening.quadTo(0, hh * 1.9, -hw, 0);
+    opening.closeSubpath();
+    p->setPen(QPen(lip, lipW, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p->setBrush(s.fill);
+    p->drawPath(opening);
+
+    p->save();
+    p->setClipPath(opening);
+    p->setPen(Qt::NoPen);
+    p->setBrush(QColor(255, 252, 244, 235));                       // upper teeth
+    p->drawRect(QRectF(-hw, -hh * 1.1, 2 * hw, hh * 0.75));
+    p->setBrush(s.accent.alpha() > 0 ? s.accent : QColor(230, 105, 125));  // tongue
+    p->drawEllipse(QRectF(-hw * 0.55, hh * 0.12, hw * 1.1, hh * 1.1));
+    p->restore();
+}
+
 }  // namespace
 
 QStringList effectNames()
@@ -337,7 +392,9 @@ QStringList effectNames()
 
 int effectCount() { return int(sizeof(kNames) / sizeof(kNames[0])); }
 
-bool effectLoops(int preset) { return preset == Fire || preset == Smoke || preset == Sparkles; }
+int mouthEffectPreset() { return Mouth; }
+
+bool effectLoops(int preset) { return preset == Fire || preset == Smoke || preset == Sparkles || preset == Mouth; }
 
 void paintEffect(QPainter* p, const Shape& s)
 {
@@ -351,5 +408,6 @@ void paintEffect(QPainter* p, const Shape& s)
     case Confetti: confetti(p, s, t); break;
     case Sparkles: sparkles(p, s, t); break;
     case StarBurst: starBurst(p, s, t); break;
+    case Mouth: mouth(p, s, t); break;
     }
 }

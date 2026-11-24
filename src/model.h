@@ -79,6 +79,7 @@ struct Shape {
     double effectTime = 0;     // 0..1 playhead (wraps for looping effects)
     int effectSeed = 1;        // deterministic variation
     double effectDensity = 1;  // particle-count multiplier (0.1 .. 3)
+    int mouthBeats = 5;        // Mouth: open/close cycles per loop
 
     bool hasWarp() const;
     bool deformed() const { return squash != 1.0 || hasWarp(); }
@@ -118,7 +119,18 @@ struct Frame {
     double tweenSquash = 0;   // 0..1
     int tweenPath = 0;        // 0 straight, 1 arc, 2 thrown (gravity)
     double tweenArc = 0;      // arc / throw height in px
+    // First-class text tween: this frame holds the finished line (full text) and
+    // stands for a generated strip: letters appear at textRate, then textLinger
+    // held frames, then a hard cut to whatever the next frame contains.
+    bool textTween = false;
+    int textShape = 0;        // id of the Text shape to type (0 = first text/bubble)
+    double textRate = 1.0;    // characters revealed per generated frame
+    int textLinger = 6;       // frames held on the finished line
+    int textMouth = 0;        // Mouth effect id driving the line (0 = auto)
+    int textBeats = 0;        // 0 = derive from syllables in the text
     bool isTween() const { return tweenCount > 0; }
+    bool isTextTween() const { return textTween; }
+    bool isComputed() const { return isTween() || isTextTween(); }
 
     int indexOf(int shapeId) const;
     Shape* find(int shapeId);

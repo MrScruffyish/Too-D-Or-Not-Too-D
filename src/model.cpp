@@ -158,6 +158,7 @@ QJsonObject shapeToJson(const Shape& s)
         o["fxt"] = s.effectTime;
         o["fxs"] = s.effectSeed;
         o["fxd"] = s.effectDensity;
+        o["mb"] = s.mouthBeats;
     }
     return o;
 }
@@ -212,6 +213,7 @@ Shape shapeFromJson(const QJsonObject& o)
     s.effectTime = o.value("fxt").toDouble(0);
     s.effectSeed = o.value("fxs").toInt(1);
     s.effectDensity = qBound(0.1, o.value("fxd").toDouble(1), 3.0);
+    s.mouthBeats = qBound(1, o.value("mb").toInt(5), 24);
     return s;
 }
 
@@ -339,7 +341,9 @@ bool operator==(const Shape& a, const Shape& b)
            a.bubble == b.bubble && a.tail == b.tail && a.bubbleFill == b.bubbleFill &&
            a.tailLink.target == b.tailLink.target && a.tailLink.anchor == b.tailLink.anchor &&
            a.name == b.name && a.text == b.text && a.fontFamily == b.fontFamily &&
-           a.imageKey == b.imageKey;
+           a.imageKey == b.imageKey && a.effectPreset == b.effectPreset &&
+           a.effectTime == b.effectTime && a.effectSeed == b.effectSeed &&
+           a.effectDensity == b.effectDensity && a.mouthBeats == b.mouthBeats;
 }
 
 // ---------------------------------------------------------------- Frame
@@ -394,12 +398,22 @@ QJsonObject Document::toJson() const
         for (const Frame& f : chapterFrames(c)) {
             QJsonObject fo;
             fo["dur"] = f.durationMs;
-            if (f.isTween()) {
+            if (f.tweenCount > 0) {
                 fo["tweenN"] = f.tweenCount;
                 fo["tweenEase"] = f.tweenEase;
                 fo["tweenSquash"] = f.tweenSquash;
                 fo["tweenPath"] = f.tweenPath;
                 fo["tweenArc"] = f.tweenArc;
+            }
+            if (f.isTextTween()) {
+                QJsonObject tt;
+                tt["on"] = true;
+                tt["shape"] = f.textShape;
+                tt["rate"] = f.textRate;
+                tt["linger"] = f.textLinger;
+                tt["mouth"] = f.textMouth;
+                tt["beats"] = f.textBeats;
+                fo["tt"] = tt;
             }
             QJsonArray sa, ja;
             for (const Shape& s : f.shapes) {
@@ -441,6 +455,15 @@ static QVector<Frame> framesFromJson(const QJsonArray& arr, int& maxId)
         f.tweenSquash = fo.value("tweenSquash").toDouble(0);
         f.tweenPath = fo.value("tweenPath").toInt(0);
         f.tweenArc = fo.value("tweenArc").toDouble(0);
+        const QJsonObject tt = fo.value("tt").toObject();
+        if (!tt.isEmpty()) {
+            f.textTween = tt.value("on").toBool(true);
+            f.textShape = tt.value("shape").toInt(0);
+            f.textRate = qBound(0.1, tt.value("rate").toDouble(1), 24.0);
+            f.textLinger = qMax(0, tt.value("linger").toInt(6));
+            f.textMouth = tt.value("mouth").toInt(0);
+            f.textBeats = qMax(0, tt.value("beats").toInt(0));
+        }
         for (const QJsonValue& sv : fo.value("shapes").toArray()) {
             f.shapes.append(shapeFromJson(sv.toObject()));
             maxId = qMax(maxId, qMax(f.shapes.constLast().id, f.shapes.constLast().group));

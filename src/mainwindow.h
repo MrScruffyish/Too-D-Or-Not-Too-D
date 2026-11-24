@@ -123,6 +123,9 @@ private:
     void updateCanvasFrame();   // what the canvas shows for the current frame (+ onion skin)
     void tweenBake();
     void editTween(const std::function<void(Frame&)>& fn, const QString& text, int field);
+    void toggleTextTween();  // turn the current keyframe into a typewriter text tween
+    void editTextTween(const std::function<void(Frame&)>& fn, const QString& text, int field);
+    void refreshTextMouthCombo(const Frame& f);
     void animateEffect();  // build keyframes + a dynamic tween for selected effects
     void surpriseEffect(); // randomise the selected effects
     void playStep();
@@ -190,11 +193,20 @@ private:
     QComboBox *m_twEase = nullptr, *m_twPath = nullptr;
     QSpinBox* m_twArc = nullptr;
     QLabel* m_twInfo = nullptr;
+    // first-class text tween (typewriter + optional linked Mouth)
+    QGroupBox* m_textTweenBox = nullptr;
+    QCheckBox* m_ttEnabled = nullptr;
+    QDoubleSpinBox* m_ttRate = nullptr;
+    QSpinBox *m_ttLinger = nullptr, *m_ttBeats = nullptr;
+    QComboBox* m_ttMouth = nullptr;
+    QPushButton* m_ttDefault = nullptr;
+    QLabel* m_ttInfo = nullptr;
     // effects
     QGroupBox* m_fxBox = nullptr;
     QComboBox* m_fxPreset = nullptr;
     QDoubleSpinBox* m_fxTime = nullptr;
     QSpinBox *m_fxParticles = nullptr, *m_fxDensity = nullptr, *m_fxSeed = nullptr, *m_fxFrames = nullptr;
+    QSpinBox* m_mouthBeats = nullptr;
     QComboBox* m_jType = nullptr;
     QCheckBox* m_jLim = nullptr;
     QDoubleSpinBox *m_jMin = nullptr, *m_jMax = nullptr, *m_jStiff = nullptr;
@@ -221,7 +233,7 @@ private:
     QVector<QAction*> m_toolActs;
     QAction *m_actUndo, *m_actRedo, *m_actPlay;
     QAction *m_actFrameNew, *m_actFrameBlank, *m_actFrameDup, *m_actFrameDel;
-    QAction *m_actFrameLeft, *m_actFrameRight, *m_actTween, *m_actPrev, *m_actNext;
+    QAction *m_actFrameLeft, *m_actFrameRight, *m_actTween, *m_actTextTween, *m_actPrev, *m_actNext;
     QAction *m_actNew, *m_actOpen, *m_actSave, *m_actSaveAs, *m_actImage, *m_actExportFrame, *m_actExportAnim, *m_actDocSettings, *m_actQuit;
     QAction *m_actCut, *m_actCopy, *m_actPaste, *m_actDup, *m_actDel, *m_actSelAll, *m_actSelConnected, *m_actDisconnect;
     QAction *m_actGroup, *m_actUngroup;

@@ -38,8 +38,8 @@ To run the headless smoke test: `./build/tood --selftest /some/dir`
 | F | Freehand | Drag to draw; the stroke is simplified and smoothed. Ending near the start closes it. The tool stays active for more strokes. |
 | B Z | Polyline, Curve | Click points: straight segments, or a smooth curve through them. Double-click or Enter finishes; click the first point to close; Backspace removes the last point; Esc cancels. |
 | X | Text | Font, size, bold, italic and alignment are in Properties. |
-| G | Speech bubble | Click to place text in a bubble and type it. Drag the yellow handle to point the tail; drop it on a shape (with *Sticky ends* on, no Shift) to glue it, so it follows the speaker; drop it on empty space or hold Shift to keep it free. Style (speech, thought, shout, box) and colours in Properties; any text can get a bubble there. In tweens, changing text is typed in letter by letter and the bubble grows with it. |
-| K | Effect | Click or drag to place a procedural particle effect: **Explosion**, **Fire**, **Smoke**, **Shockwave**, **Confetti**, **Magic sparkles** or **Star burst (impact)**. Use *Animate* in Properties to make it play over N frames, or tween *Time* yourself. |
+| G | Speech bubble | Click to place text in a bubble and type it. Drag the yellow handle to point the tail; drop it on a shape (with *Sticky ends* on, no Shift) to glue it, so it follows the speaker; drop it on empty space or hold Shift to keep it free. Style (speech, thought, shout, box) and colours in Properties; any text can get a bubble there. In tweens, changing text is typed in letter by letter and the bubble grows with it. For dialogue, use a first-class **text tween** (Ctrl+Shift+T) instead — see below. |
+| K | Effect | Click or drag to place a procedural effect: **Explosion**, **Fire**, **Smoke**, **Shockwave**, **Confetti**, **Magic sparkles**, **Star burst (impact)** or **Mouth (talk)**. Use *Animate* in Properties to make it play over N frames, or tween *Time* yourself. |
 | O | Point | Helper point. Visible while editing, never exported. |
 | C | Connect | Click a point on shape A, then a point on shape B; B moves so the points meet. Click the same spot twice to join overlapping shapes. |
 | I | Pin | Click where shapes overlap to connect them at that exact point (nothing moves). "Pin joins" in the toolbar: the **top two** shapes, or **all** shapes under the spot (Ctrl+click = the other mode). Uses the "Connect as" type; the lower shape is the parent. Handy after drawing, e.g. a circle on top of a rectangle. |
@@ -87,8 +87,24 @@ Effects are ordinary shapes with a **Time** property (0–100%), so they show up
 - **Confetti** — falling, tumbling coloured pieces.
 - **Magic sparkles** — looping twinkling stars.
 - **Star burst (impact)** — a hit flash, then stars shooting outward while they pulse, spin and fade. Put one where something gets hit.
+- **Mouth (talk)** — a lens-shaped mouth that opens, closes, narrows on rounded syllables and returns to its original size. Place it on a face and use *Animate* to talk for N frames: Phase runs 0→100% as a live tween, with **Beats** open/close cycles (1–24) and a deterministic **Seed** that varies each beat. *Narrowing*, *Inside*, *Tongue*, *Lips* and *Lip width* control the look. The phase loops, so the tween ends in the same pose it started.
 
 Properties for an effect: preset, Time/Phase, particle count, density, seed, main colour and highlight colour, plus **Spread** (how far the particles travel). **Surprise me** picks a random preset, palette and seed. **Animate** is the quick way to play an effect: it sets Time to 0% on the current frame, adds a keyframe at 100% and inserts a live tween of the chosen length between them (linear easing, so particle motion stays even). You can also keyframe Time by hand, and Bake the tween when you want plain editable frames. Like any shape, an effect can be glued to a parent joint so it travels with a character.
+
+## Example tutorial
+`tutorial.mp4` is a 48-second tour made entirely in TooD, with seven chapters:
+welcome, drawing, text & speech bubbles, joints, frames & tweens, effects, and
+chapters & export. Each scene shows only the controls that matter for that step.
+Its editable source is `tutorial.tood` — open it to inspect the real tweens
+(first-class typewriter text tween with a hard cut, arc path, effect Phase 0→100%). A shorter mouth-only example
+is in `mouth-tutorial.tood` / `mouth-tutorial.mp4`. Rebuild them with:
+
+```sh
+python3 tools/make_tutorial.py tutorial.tood
+./build/tood --render tutorial.tood /tmp/tood-full-tutorial
+ffmpeg -framerate 10 -i /tmp/tood-full-tutorial/frame_%04d.png \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart tutorial.mp4
+```
 
 ## Library
 Save objects for reuse with **Add Selection to Library** (Ctrl+B). Select a few connected items plus some standalone ones (Ctrl+L extends the selection to everything connected), then give them a name. Joints, glued lines, groups and images are kept. The **Library** panel shows thumbnails: double-click an item to insert it at the view centre, or drag it onto the canvas. The library is shared by all projects and stored as small `.tood` files in `~/.local/share/TooD/TooD/library/` (open the folder with the "…" button).
@@ -104,6 +120,36 @@ Save objects for reuse with **Add Selection to Library** (Ctrl+B). Select a few 
   - **Motion paths** (Ctrl+M): on a tween, or on a keyframe next to one, a dashed path with dots and faint outlines shows where the shapes go.
 - **Onion skin** (Ctrl+K) shows the previous frame faintly. **Play** previews the animation.
 
+### Text tween (typewriter dialogue)
+
+A **first-class text tween** is one stored frame that holds the *finished* line and generates
+its typing on playback/export. The frame strip marks it green (`TYPE ×… +…`); the canvas still
+shows the full, editable line.
+
+#### How to use it
+
+1. Put the **full line** in a Text or speech-bubble shape on a frame.
+2. Choose **Frames → Text tween (typewriter)** (**Ctrl+Shift+T**), or tick *This frame types
+   its text* in Properties.
+3. Play or export. The letters appear over time, the finished line lingers, and then the next
+   stored frame arrives on a **hard cut** — no fade.
+4. For the next line: press **N** to copy, delete the old bubble, add the new one, and turn that
+   frame into another text tween. Copying a text tween makes a normal frame holding the whole
+   line. Other motion stays an ordinary tween.
+
+#### Controls
+
+- **Rate** = characters revealed per generated frame. It starts from the global default
+  (saved with *Use this rate as default*), but each text tween keeps its own override.
+- **Linger** = frames held on the finished line before the hard cut.
+- **Mouth** = *Auto* (first Mouth effect in the frame), *None*, or an explicit effect id.
+  Its Phase runs 0→100% across the spoken line, then rests closed during the linger.
+- **Beats** = one open/close per vowel group by default (e.g. "Hello world!" → 3), or set a
+  fixed count.
+
+In `.tood` the settings live under the frame's `tt` key; generated frames themselves are plain
+static frames, so export and undo keep working.
+
 | Key | Action |
 |---|---|
 | N (or Ctrl+Shift+N) | New frame (copy of current), and switch to it |
@@ -113,6 +159,7 @@ Save objects for reuse with **Add Selection to Library** (Ctrl+B). Select a few 
 | PgUp / PgDn or , / . | Previous / next frame |
 | Alt+PgUp / Alt+PgDn or Alt+, / Alt+. | Move frame left / right |
 | Ctrl+T | Tween to next frame |
+| Ctrl+Shift+T | Text tween (typewriter) on/off for this frame |
 | Ctrl+Enter or Ctrl+Space | Play / stop |
 
 ## Chapters (large projects)

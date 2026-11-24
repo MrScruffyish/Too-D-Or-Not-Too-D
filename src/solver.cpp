@@ -1,5 +1,7 @@
 #include "solver.h"
 
+#include "effects.h"
+
 #include <QtMath>
 #include <cmath>
 #include <functional>
@@ -644,16 +646,129 @@ QVector<Frame> makeTweens(const Frame& a, const Frame& b, int n, int em, double 
     return out;
 }
 
+namespace {
+
+// The shape being typed: an explicit id, otherwise the frame's first text object.
+const Shape* typingShape(const Frame& f, int id)
+{
+    if (id > 0) {
+        const Shape* s = f.find(id);
+        return s && s->type == ShapeType::Text ? s : nullptr;
+    }
+    for (const Shape& s : f.shapes)
+        if (s.type == ShapeType::Text) return &s;
+    return nullptr;
+}
+
+Shape* mouthShape(Frame& f, int id)
+{
+    if (id < 0) return nullptr;          // explicitly disabled
+    if (id > 0) {
+        Shape* s = f.find(id);
+        return s && s->type == ShapeType::Effect && s->effectPreset == mouthEffectPreset() ? s : nullptr;
+    }
+    for (Shape& s : f.shapes)             // auto: first Mouth in this frame
+        if (s.type == ShapeType::Effect && s.effectPreset == mouthEffectPreset()) return &s;
+    return nullptr;
+}
+
+// One open/close per vowel group, with a sensible minimum. "Hello world!" -> 3.
+int autoBeats(const QString& text)
+{
+    const QString vowels = QStringLiteral("aeiouy");
+    int beats = 0;
+    bool inVowel = false;
+    for (QChar c : text.toLower()) {
+        const bool v = c.isLetter() && vowels.contains(c);
+        if (v && !inVowel) ++beats;
+        inVowel = v;
+    }
+    return qBound(1, beats, 24);
+}
+
+}  // namespace
+
+int textTweenFrameCount(const Frame& f)
+{
+    const Shape* s = typingShape(f, f.textShape);
+    if (!s) return 1;
+    const int n = s->text.size();
+    if (n <= 1) return 1;
+    return 1 + int(std::ceil((n - 1) / qBound(0.1, f.textRate, 24.0)));
+}
+
+QVector<Frame> textTweenFrames(const QVector<Frame>& frames, int i)
+{
+    if (i < 0 || i >= frames.size() || !frames.at(i).isTextTween()) return {};
+    const Frame& src = frames.at(i);
+    const Shape* text = typingShape(src, src.textShape);
+    if (!text) return {};
+
+    const QString full = text->text;
+    const int n = full.size();
+    const int typeN = textTweenFrameCount(src);
+    const double rate = qBound(0.1, src.textRate, 24.0);
+    const int beats = src.textBeats > 0 ? qBound(1, src.textBeats, 24) : autoBeats(full);
+    const qint64 linger = qMax(0, src.textLinger);
+
+    // Keep any manual resize of the full bubble as a factor of the natural text size.
+    Shape fitFull = *text;
+    fitTextShape(fitFull);
+    const double kw = text->w / qMax(1.0, fitFull.w);
+    const double kh = text->h / qMax(1.0, fitFull.h);
+    const QPointF tipPx(text->tail.x() * text->w, text->tail.y() * text->h);
+
+    QVector<Frame> out;
+    out.reserve(typeN + int(linger));
+    for (int k = 0; k < typeN; ++k) {
+        Frame g = src;
+        g.tweenCount = 0;
+        g.textTween = false;  // generated in-betweens are ordinary static frames
+        Shape* gt = g.find(text->id);
+        if (!gt) continue;
+        const int visible = n <= 0 ? 0 : qMin(n, 1 + int(std::floor(k * rate)));
+        gt->text = full.left(visible);
+        Shape fit = *gt;
+        fitTextShape(fit);
+        gt->w = fit.w * kw;
+        gt->h = fit.h * kh;
+        gt->tail = QPointF(tipPx.x() / qMax(1.0, gt->w), tipPx.y() / qMax(1.0, gt->h));
+        if (Shape* m = mouthShape(g, src.textMouth)) {
+            m->mouthBeats = beats;
+            m->effectTime = double(k) / typeN;  // phase 0..1 across the spoken line
+        }
+        enforce(g, gt->id);
+        out << g;
+    }
+    for (int k = 0; k < linger; ++k) {  // finished line held on a hard cut, no fade
+        Frame h = src;
+        h.tweenCount = 0;
+        h.textTween = false;
+        if (Shape* m = mouthShape(h, src.textMouth)) {
+            m->mouthBeats = beats;
+            m->effectTime = 0;  // closed rest pose while the line is held
+        }
+        out << h;
+    }
+    return out;
+}
+
+QVector<Frame> computedFrames(const QVector<Frame>& frames, int i)
+{
+    if (i < 0 || i >= frames.size()) return {};
+    return frames.at(i).isTextTween() ? textTweenFrames(frames, i) : tweenFrames(frames, i);
+}
+
 QVector<Frame> tweenFrames(const QVector<Frame>& frames, int i)
 {
     if (i < 0 || i >= frames.size() || !frames.at(i).isTween()) return {};
     int a = i - 1, b = i + 1;
-    while (a >= 0 && frames.at(a).isTween()) --a;
-    while (b < frames.size() && frames.at(b).isTween()) ++b;
+    while (a >= 0 && frames.at(a).isComputed()) --a;
+    while (b < frames.size() && frames.at(b).isComputed()) ++b;
     if (a < 0 || b >= frames.size()) return {};
     int a0 = a - 1, b1 = b + 1;  // keyframes beyond, for the smooth path
-    while (a0 >= 0 && frames.at(a0).isTween()) --a0;
-    while (b1 < frames.size() && frames.at(b1).isTween()) ++b1;
+    while (a0 >= 0 && frames.at(a0).isComputed()) --a0;
+    while (b1 < frames.size() && frames.at(b1).isComputed()) ++b1;
     const Frame& t = frames.at(i);
     return makeTweens(frames.at(a), frames.at(b), t.tweenCount, t.tweenEase, t.tweenSquash, t.durationMs, t.tweenPath, t.tweenArc,
                       a0 >= 0 ? &frames.at(a0) : nullptr, b1 < frames.size() ? &frames.at(b1) : nullptr);
@@ -664,7 +779,7 @@ QVector<Frame> expandFrames(const QVector<Frame>& frames)
     QVector<Frame> out;
     out.reserve(frames.size());
     for (int i = 0; i < frames.size(); ++i) {
-        if (frames.at(i).isTween()) out += tweenFrames(frames, i);
+        if (frames.at(i).isComputed()) out += computedFrames(frames, i);
         else out << frames.at(i);
     }
     return out;
@@ -673,6 +788,8 @@ QVector<Frame> expandFrames(const QVector<Frame>& frames)
 int frameSpanMs(const QVector<Frame>& frames, int i)
 {
     const Frame& f = frames.at(i);
+    if (f.isTextTween())
+        return (textTweenFrameCount(f) + qMax(0, f.textLinger)) * f.durationMs;
     return f.isTween() ? f.tweenCount * f.durationMs : f.durationMs;
 }
 
